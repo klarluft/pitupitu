@@ -10,9 +10,11 @@ mod device;
 mod home;
 mod inventory;
 mod link;
+mod router;
 mod service;
 mod settings;
 mod skill;
+mod term;
 #[cfg(test)]
 mod testhost;
 
@@ -97,6 +99,24 @@ enum Cmd {
     Skill {
         #[command(subcommand)]
         action: SkillCmd,
+    },
+    /// Show a session of this box's own terminals live here (Ctrl-\\ detaches).
+    Attach {
+        /// The session's name or pane, as `pitupitu sessions` lists them
+        /// (default: the only one, or the newest).
+        session: Option<String>,
+    },
+    /// The sessions in this box's own terminals.
+    Sessions,
+    /// Hold the box's own terminals (started by `connect` when needed).
+    #[command(hide = true)]
+    Terminals,
+    /// What an agent's hook reports (run by the agents themselves).
+    #[command(hide = true)]
+    Hook {
+        pane: String,
+        event: String,
+        arg: Option<String>,
     },
 }
 
@@ -243,6 +263,25 @@ async fn main() -> Result<()> {
             settings::print(&settings::get(&cfg).await?, as_json);
             Ok(())
         }
+        Cmd::Terminals => term::holder::run(term::socket_path()).await,
+        Cmd::Hook { pane, event, arg } => {
+            term::client::hook(&pane, &event, arg.as_deref()).await;
+            Ok(())
+        }
+        Cmd::Sessions => sessions(as_json).await,
+        Cmd::Attach { session } => {
+            let target = match session {
+                Some(s) => s,
+                None => {
+                    let list = term_agents().await;
+                    match list.last() {
+                        Some(a) => a.target().to_string(),
+                        None => bail!("no sessions in this box's own terminals"),
+                    }
+                }
+            };
+            term::attach::attach(&target).await
+        }
         Cmd::Skill { action } => {
             match action {
                 SkillCmd::Print => print!("{}", skill::SKILL),
@@ -255,6 +294,40 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn term_agents() -> Vec<herdr::AgentInfo> {
+    use herdr::AgentHost;
+    term::client::TermHost::default()
+        .list_agents()
+        .await
+        .unwrap_or_default()
+}
+
+/// `pitupitu sessions`: the terminal host's agents.
+async fn sessions(as_json: bool) -> Result<()> {
+    let list = term_agents().await;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(());
+    }
+    if list.is_empty() {
+        println!("no sessions in this box's own terminals");
+    }
+    for a in list {
+        println!(
+            "{}  {} {} in {}{}",
+            a.target(),
+            a.agent,
+            a.agent_status,
+            a.cwd.display(),
+            a.terminal_title_stripped
+                .as_deref()
+                .map(|t| format!(" — {t}"))
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
 }
 
 /// After a change: the settings as they now are.
@@ -278,15 +351,20 @@ async fn connect(cfg: &Config) -> Result<()> {
         String::new()
     });
     let available = inventory::available().await;
+    let router = Arc::new(router::Router::new(
+        Arc::new(herdr),
+        Arc::new(term::client::TermHost::default()),
+    ));
     let link = link::Link {
         url: cfg.box_url(),
         api_key,
         box_name: cfg.box_name(),
         home,
         herdr_version,
-        host: Arc::new(herdr),
+        host: router.clone(),
         available,
         history: Some(config::home_dir()),
+        router: Some(router),
         ping_timeout: link::PING_TIMEOUT,
     };
     tokio::select! {
@@ -463,6 +541,12 @@ async fn status(cfg: &Config) -> Result<()> {
     );
     let recent = inventory::recent(&config::home_dir());
     println!("recent project folders: {}", recent.len());
+    let own = term_agents().await;
+    println!(
+        "own terminals: {} session{} (`pitupitu sessions`)",
+        own.len(),
+        if own.len() == 1 { "" } else { "s" }
+    );
     println!("service: {}", service::status());
     Ok(())
 }
