@@ -1,0 +1,19 @@
+[package]
+name = "pitupitu-herdr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Adapter around the herdr CLI: the only place pitupitu talks to herdr."
+
+[lib]
+name = "herdr"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

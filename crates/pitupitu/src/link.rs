@@ -1,0 +1,455 @@
+//! The box link: one outbound WebSocket to pitupitu cloud (`GET /v1/box`),
+//! over which the cloud calls herdr on this machine. Nothing connects in.
+//! The protocol is in `docs/box-link.md`.
+
+use crate::calls::{self, CallError};
+use crate::home;
+use anyhow::{anyhow, Context, Result};
+use futures_util::{SinkExt, StreamExt};
+use herdr::{AgentHost, AgentInfo};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, info, warn};
+
+/// The box link protocol this box speaks.
+pub const PROTOCOL: u32 = 1;
+
+/// How often herdr's agent list and the home folder are looked at.
+const POLL: Duration = Duration::from_secs(1);
+/// The cloud pings every 20 s; this long without one means a dead socket.
+pub const PING_TIMEOUT: Duration = Duration::from_secs(60);
+const BACKOFF_MIN: Duration = Duration::from_secs(1);
+const BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// A link that stayed up this long starts the backoff over.
+const STABLE: Duration = Duration::from_secs(30);
+
+pub struct Link {
+    pub url: String,
+    pub api_key: String,
+    pub box_name: String,
+    pub home: PathBuf,
+    pub herdr_version: String,
+    pub host: Arc<dyn AgentHost>,
+    /// Shortened in tests.
+    pub ping_timeout: Duration,
+}
+
+/// Why a link ended.
+#[derive(Debug, PartialEq)]
+pub enum End {
+    /// Another box with the same key took over (4006): stop, don't fight it.
+    Replaced,
+    /// Closed by the cloud with this code and reason; reconnect.
+    Closed(u16, String),
+}
+
+impl Link {
+    /// Connect, serve, reconnect with backoff, until another box replaces
+    /// this one.
+    pub async fn run(&self) -> Result<()> {
+        let mut backoff = BACKOFF_MIN;
+        loop {
+            let started = Instant::now();
+            match self.session().await {
+                Ok(End::Replaced) => {
+                    warn!("another box connected with this key; stopping here");
+                    return Ok(());
+                }
+                Ok(End::Closed(code, reason)) => match code {
+                    4001 => warn!(
+                        "pitupitu cloud rejected this box's key; run `pitupitu setup --relink`"
+                    ),
+                    4007 => warn!(
+                        %reason,
+                        "pitupitu is out of date: run `curl -fsSL https://pitupitu.chat/install | sh` or `brew upgrade pitupitu`"
+                    ),
+                    _ => info!(code, %reason, "box link closed"),
+                },
+                Err(e) => warn!("box link: {e:#}"),
+            }
+            if started.elapsed() > STABLE {
+                backoff = BACKOFF_MIN;
+            }
+            let jitter = backoff.mul_f64(rand::random_range(0.0..0.25));
+            tokio::time::sleep(backoff + jitter).await;
+            backoff = (backoff * 2).min(BACKOFF_MAX);
+        }
+    }
+
+    /// One connection, from the upgrade to the close.
+    pub async fn session(&self) -> Result<End> {
+        let mut request = self
+            .url
+            .as_str()
+            .into_client_request()
+            .with_context(|| format!("bad cloud url {}", self.url))?;
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", self.api_key)
+                .parse()
+                .context("api key is not a valid header value")?,
+        );
+        let (ws, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .with_context(|| format!("connecting to {}", self.url))?;
+        let (mut sink, mut stream) = ws.split();
+
+        let agents = match self.host.list_agents().await {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("herdr: {e}; is herdr running?");
+                Vec::new()
+            }
+        };
+        let hello = json!({
+            "note": "hello",
+            "protocol": PROTOCOL,
+            "version": env!("CARGO_PKG_VERSION"),
+            "box": self.box_name,
+            "herdr": self.herdr_version,
+            "home": self.home,
+            "agents": agents,
+        });
+        sink.send(text(&hello)).await?;
+        let files = home::scan(&self.home);
+        sink.send(text(&json!({"note": "home", "files": files})))
+            .await?;
+        info!(url = %self.url, "box link up");
+
+        let (tx, mut rx) = mpsc::channel::<Value>(64);
+        let poller = tokio::spawn(poll(
+            self.host.clone(),
+            self.home.clone(),
+            signature(&agents),
+            files,
+            tx.clone(),
+        ));
+        let _poller = AbortOnDrop(poller);
+
+        let mut last_ping = Instant::now();
+        let mut liveness = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                frame = stream.next() => {
+                    let msg = match frame {
+                        None => return Err(anyhow!("socket ended")),
+                        Some(m) => m.context("reading from the cloud")?,
+                    };
+                    match msg {
+                        Message::Text(t) => self.incoming(t.as_str(), &tx),
+                        // Pong answers are queued by the library and flushed
+                        // on the next read or write.
+                        Message::Ping(_) => last_ping = Instant::now(),
+                        Message::Close(frame) => {
+                            let (code, reason) = frame
+                                .map(|f| (u16::from(f.code), f.reason.to_string()))
+                                .unwrap_or((u16::from(CloseCode::Normal), String::new()));
+                            return Ok(if code == 4006 {
+                                End::Replaced
+                            } else {
+                                End::Closed(code, reason)
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Some(out) = rx.recv() => sink.send(text(&out)).await?,
+                _ = liveness.tick() => {
+                    if last_ping.elapsed() > self.ping_timeout {
+                        return Err(anyhow!("no ping from the cloud in {:?}", self.ping_timeout));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A frame from the cloud: a call is run on its own task, the reply
+    /// goes back through `tx`. Only the call's name is logged, never its
+    /// arguments or result.
+    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>) {
+        let Ok(value) = serde_json::from_str::<Value>(frame) else {
+            warn!("unreadable frame from the cloud");
+            return;
+        };
+        if let Some(note) = value.get("note").and_then(Value::as_str) {
+            debug!(note, "note from the cloud");
+            return;
+        }
+        let Some(id) = value.get("id").cloned() else {
+            warn!("frame with neither a note nor an id");
+            return;
+        };
+        let call = value
+            .get("call")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let args = value.get("args").cloned().unwrap_or(Value::Null);
+        let host = self.host.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let started = Instant::now();
+            let deadline = calls::deadline(&call, &args);
+            let result = tokio::time::timeout(deadline, calls::dispatch(&*host, &call, args))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(CallError::timeout(format!("{call} took over {deadline:?}")))
+                });
+            let reply = match result {
+                Ok(ok) => {
+                    debug!(%call, ms = started.elapsed().as_millis() as u64, "call ok");
+                    json!({"id": id, "ok": ok})
+                }
+                Err(err) => {
+                    info!(%call, kind = err.kind, code = ?err.code, "call failed");
+                    json!({"id": id, "err": err})
+                }
+            };
+            let _ = tx.send(reply).await;
+        });
+    }
+}
+
+fn text(v: &Value) -> Message {
+    Message::Text(v.to_string().into())
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// What decides whether a new `agents` note is due: the set of panes and
+/// each one's status and counters.
+type Signature = Vec<(String, String, u64, Option<u64>)>;
+
+fn signature(agents: &[AgentInfo]) -> Signature {
+    let mut sig: Signature = agents
+        .iter()
+        .map(|a| {
+            (
+                a.pane_id.0.clone(),
+                a.agent_status.as_str().to_string(),
+                a.state_change_seq,
+                a.completion_seq,
+            )
+        })
+        .collect();
+    sig.sort();
+    sig
+}
+
+/// Once a second: send `agents` when herdr's list changed, `home` when the
+/// pitupitu files did.
+async fn poll(
+    host: Arc<dyn AgentHost>,
+    home_dir: PathBuf,
+    mut last_agents: Signature,
+    mut last_files: Vec<home::HomeFile>,
+    tx: mpsc::Sender<Value>,
+) {
+    let mut tick = tokio::time::interval(POLL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut herdr_down = false;
+    loop {
+        tick.tick().await;
+        match host.list_agents().await {
+            Ok(agents) => {
+                if herdr_down {
+                    info!("herdr answers again");
+                    herdr_down = false;
+                }
+                let sig = signature(&agents);
+                if sig != last_agents {
+                    last_agents = sig;
+                    if tx
+                        .send(json!({"note": "agents", "agents": agents}))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                if !herdr_down {
+                    warn!("herdr: {e}");
+                    herdr_down = true;
+                }
+            }
+        }
+        let dir = home_dir.clone();
+        let files = tokio::task::spawn_blocking(move || home::scan(&dir))
+            .await
+            .unwrap_or_default();
+        if files != last_files {
+            last_files = files.clone();
+            if tx
+                .send(json!({"note": "home", "files": files}))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testhost::{agent, FakeHost};
+    use herdr::AgentStatus;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+
+    type Server = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+    /// A cloud end: accepts one socket, checks the key, hands it over.
+    #[allow(clippy::result_large_err)] // the handshake callback's signature
+    async fn cloud() -> (String, tokio::sync::oneshot::Receiver<Server>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/v1/box", listener.local_addr().unwrap());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_hdr_async(tcp, |req: &Request, resp: Response| {
+                assert_eq!(req.uri().path(), "/v1/box");
+                assert_eq!(req.headers()["authorization"], "Bearer ptp_test");
+                Ok(resp)
+            })
+            .await
+            .unwrap();
+            let _ = tx.send(ws);
+        });
+        (url, rx)
+    }
+
+    async fn next_json(ws: &mut Server) -> Value {
+        loop {
+            match ws.next().await.unwrap().unwrap() {
+                Message::Text(t) => return serde_json::from_str(t.as_str()).unwrap(),
+                _ => continue,
+            }
+        }
+    }
+
+    fn link(url: String, host: FakeHost, home: PathBuf) -> Link {
+        Link {
+            url,
+            api_key: "ptp_test".into(),
+            box_name: "testbox".into(),
+            home,
+            herdr_version: "herdr 0.9.3".into(),
+            host: Arc::new(host),
+            ping_timeout: PING_TIMEOUT,
+        }
+    }
+
+    #[tokio::test]
+    async fn hello_calls_notes_and_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        home::ensure(dir.path()).unwrap();
+        let host = FakeHost::default();
+        host.agents
+            .lock()
+            .unwrap()
+            .push(agent("notes", "w1:p1", AgentStatus::Working, 5));
+        let (url, server) = cloud().await;
+        let l = link(url, host.clone(), dir.path().to_path_buf());
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+
+        let hello = next_json(&mut ws).await;
+        assert_eq!(hello["note"], "hello");
+        assert_eq!(hello["protocol"], 1);
+        assert_eq!(hello["box"], "testbox");
+        assert_eq!(hello["herdr"], "herdr 0.9.3");
+        assert_eq!(hello["agents"][0]["name"], "notes");
+        assert_eq!(hello["home"], json!(dir.path()));
+        let home_note = next_json(&mut ws).await;
+        assert_eq!(home_note["note"], "home");
+        assert_eq!(home_note["files"][0]["path"], "PITUPITU.md");
+
+        // Overlapping calls are answered in any order, each by its id.
+        for frame in [
+            json!({"id": 1, "call": "agent", "args": {"agent": "slow"}}),
+            json!({"id": 2, "call": "read", "args": {"agent": "notes", "lines": 40}}),
+            json!({"id": 3, "call": "format_disk"}),
+        ] {
+            ws.send(text(&frame)).await.unwrap();
+        }
+        let mut replies = Vec::new();
+        for _ in 0..3 {
+            replies.push(next_json(&mut ws).await);
+        }
+        assert_eq!(
+            replies[2]["id"], 1,
+            "the slow call answers last: {replies:?}"
+        );
+        let by_id = |id: u64| replies.iter().find(|r| r["id"] == id).unwrap().clone();
+        assert_eq!(by_id(2)["ok"], "screen of notes, 40 lines");
+        assert_eq!(by_id(3)["err"]["kind"], "bad_call");
+        assert_eq!(by_id(1)["ok"]["name"], "slow");
+
+        // A change in herdr becomes an agents note; so does an edit at home.
+        host.agents.lock().unwrap()[0] = agent("notes", "w1:p1", AgentStatus::Done, 6);
+        let note = next_json(&mut ws).await;
+        assert_eq!(note["note"], "agents");
+        assert_eq!(note["agents"][0]["agent_status"], "done");
+        std::fs::write(dir.path().join("PITUPITU.md"), "I like Opus.").unwrap();
+        let note = next_json(&mut ws).await;
+        assert_eq!(note["note"], "home");
+        assert_eq!(note["files"][0]["text"], "I like Opus.");
+
+        ws.close(Some(CloseFrame {
+            code: CloseCode::from(4006),
+            reason: "replaced".into(),
+        }))
+        .await
+        .unwrap();
+        assert_eq!(session.await.unwrap().unwrap(), End::Replaced);
+    }
+
+    #[tokio::test]
+    async fn a_silent_cloud_is_a_dead_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, server) = cloud().await;
+        let mut l = link(url, FakeHost::default(), dir.path().to_path_buf());
+        l.ping_timeout = Duration::from_millis(1500);
+        let session = tokio::spawn(async move { l.session().await });
+        let _ws = server.await.unwrap();
+        let err = session.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("no ping"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn other_close_codes_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, server) = cloud().await;
+        let l = link(url, FakeHost::default(), dir.path().to_path_buf());
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+        next_json(&mut ws).await;
+        ws.close(Some(CloseFrame {
+            code: CloseCode::from(4007),
+            reason: "protocol 2".into(),
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            session.await.unwrap().unwrap(),
+            End::Closed(4007, "protocol 2".into())
+        );
+    }
+}

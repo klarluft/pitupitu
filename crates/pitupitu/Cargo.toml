@@ -1,0 +1,28 @@
+[package]
+name = "pitupitu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The pitupitu box agent: links herdr on this machine to pitupitu cloud."
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dirs.workspace = true
+futures-util.workspace = true
+herdr = { path = "../herdr", package = "pitupitu-herdr" }
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tempfile = "3"
