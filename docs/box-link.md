@@ -37,11 +37,21 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 1, "version": "0.1.0", "box": "my-laptop", "herdr": "herdr 0.9.3",
- "home": "/home/me/pitupitu", "agents": [<AgentInfo>…]}
+{"note": "hello", "protocol": 2, "version": "0.2.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+ "agents": [<AgentInfo>…],
+ "driver": "herdr", "herdr": "herdr 0.9.3",
+ "available": [{"kind": "claude", "version": "2.3.1 (Claude Code)"}],
+ "recent": [{"path": "/home/me/code/app", "agent": "claude", "at": "2026-10-17T20:00:00Z"}]}
 ```
 
 then a `home` note. Before `hello` the cloud sends nothing.
+
+- `driver`: what serves the calls. 0.2 has only `herdr`; the box's own terminal host comes in a later version.
+- `herdr`: herdr's version, `""` when it does not answer.
+- `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
+- `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
+
+Protocol 1 (0.1.x) sent `hello` without `driver`, `available` and `recent`; the cloud accepts both.
 
 ## Calls
 
@@ -66,7 +76,12 @@ An unknown call answers `bad_call`, so calls can be added behind a protocol bump
 
 ## Notes from the box
 
-- `home`: `{"note": "home", "files": [{"path": "PITUPITU.md", "text": "…"}, {"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `PITUPITU.md` and `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB.
+- `home`: `{"note": "home", "files": [{"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB. (0.1 also sent `PITUPITU.md`; the person's preferences live in the cloud now.)
+- `inventory`: `{"note": "inventory", "driver": …, "herdr": …, "available": […], "recent": […]}`, the fields of `hello` again: when herdr starts or stops answering, in reply to the cloud's `settings` note, and every five minutes when `recent` changed.
 - `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box polls herdr once a second for it.
+
+## Notes from the cloud
+
+- `settings`: `{"note": "settings", "driver": "auto" | "herdr" | "terminal"}`, sent after `hello` and when the person changes it. 0.2 answers with an `inventory` note and stays on herdr (a box set to `terminal` logs that this version has no terminal host yet).
 
 Nothing is buffered on the box while the link is down; the `hello` after a reconnect carries a fresh agent list.
