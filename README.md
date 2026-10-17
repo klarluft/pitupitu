@@ -1,6 +1,6 @@
 # pitupitu
 
-pitupitu lets you talk to your coding agents (Claude Code, Codex) on any of your machines, by voice or text, from your phone or any browser. You say what you want and where; pitupitu starts the agent session, keeps an eye on it and tells you when it is done or needs you. If you use [herdr](https://herdr.dev), the sessions run there and you see them in herdr too.
+pitupitu lets you talk to your coding agents (Claude Code, Codex) on any of your machines, by voice or text, from your phone or any browser. You say what you want and where; pitupitu starts the agent session, keeps an eye on it and tells you when it is done or needs you. If you use [herdr](https://herdr.dev), the sessions run there and you see them in herdr too; without it, this agent hosts the terminals itself and `pitupitu attach` shows any session live.
 
 This repository is the part that runs on each of your machines: a small agent that links the machine to pitupitu cloud. The conversation, the voice and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
 
@@ -55,6 +55,8 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu box driver auto\|herdr\|terminal` | what runs agent sessions here (`auto`: herdr when it runs) |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
 | `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
+| `pitupitu sessions` | the sessions in this box's own terminals (when herdr is not used) |
+| `pitupitu attach [session]` | show one live here and type into it; `Ctrl-\` detaches, it keeps running |
 | `pitupitu uninstall` | stop and remove the service; config and home folder stay |
 
 Every settings command takes `--json` and never prompts without a terminal, so your agents can run them.

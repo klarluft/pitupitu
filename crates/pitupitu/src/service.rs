@@ -55,7 +55,7 @@ pub fn systemd_unit(exe: &Path, config: Option<&Path>, path: &str) -> String {
     }
     format!(
         "[Unit]
-Description=pitupitu box agent: links herdr to pitupitu cloud
+Description=pitupitu box agent: links this machine to pitupitu cloud
 After=network-online.target
 Wants=network-online.target
 
@@ -63,6 +63,9 @@ Wants=network-online.target
 ExecStart={exec}
 Restart=always
 RestartSec=5
+# Stopping or restarting the service ends the box agent only, not the
+# terminal holder it started: agents running there keep running.
+KillMode=process
 Environment={env}
 
 [Install]
@@ -104,6 +107,8 @@ pub fn launchd_plist(exe: &Path, config: Option<&Path>, path: &str, log: &Path) 
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
+  <true/>
+  <key>AbandonProcessGroup</key>
   <true/>
   <key>StandardOutPath</key>
   <string>{log}</string>

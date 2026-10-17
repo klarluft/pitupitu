@@ -5,6 +5,7 @@
 use crate::calls::{self, CallError};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
+use crate::router::Router;
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use herdr::{AgentHost, AgentInfo};
@@ -44,6 +45,10 @@ pub struct Link {
     /// Where the agents keep their session history (the user's home
     /// directory); `None` sends no recent folders.
     pub history: Option<PathBuf>,
+    /// herdr and the terminal host behind `host`, when it is the router:
+    /// says which driver serves new sessions and takes the cloud's
+    /// setting. `None` (tests): herdr only.
+    pub router: Option<Arc<Router>>,
     /// Shortened in tests.
     pub ping_timeout: Duration,
 }
@@ -120,8 +125,12 @@ impl Link {
             }
         };
         let inv = Inventory {
-            driver: "herdr".into(),
-            herdr: if herdr_up {
+            driver: self
+                .router
+                .as_ref()
+                .map_or("herdr", |r| r.driver())
+                .to_string(),
+            herdr: if self.router.as_ref().map_or(herdr_up, |r| r.herdr_up()) {
                 self.herdr_version.clone()
             } else {
                 String::new()
@@ -155,6 +164,7 @@ impl Link {
                 history: self.history.clone(),
                 herdr_version: self.herdr_version.clone(),
                 inventory: shared.clone(),
+                router: self.router.clone(),
             },
             signature(&agents),
             files,
@@ -261,21 +271,22 @@ impl Link {
     }
 
     /// `{"note": "settings", "driver": …}`: which driver the person chose
-    /// for this box. This version only has herdr; the terminal host comes
-    /// in a later one. Answered with the inventory as it stands.
+    /// for this box (`auto`, `herdr`, `terminal`). Answered with the
+    /// inventory, which says what serves new sessions now.
     fn settings(&self, value: &Value, tx: &mpsc::Sender<Value>, shared: &Shared) {
         let wanted = value
             .get("driver")
             .and_then(Value::as_str)
             .unwrap_or("auto");
-        match wanted {
-            "terminal" => warn!(
-                "this box is set to use its own terminals, which this version of pitupitu \
-                 does not have yet; staying with herdr"
-            ),
-            _ => info!(driver = wanted, "driver setting"),
-        }
-        let note = inventory_note(&shared.lock().unwrap());
+        let note = {
+            let mut inv = shared.lock().unwrap();
+            if let Some(r) = &self.router {
+                r.set_wanted(wanted);
+                inv.driver = r.driver().to_string();
+            }
+            info!(wanted, driver = %inv.driver, "driver setting");
+            inventory_note(&inv)
+        };
         let tx = tx.clone();
         tokio::spawn(async move {
             let _ = tx.send(note).await;
@@ -328,6 +339,7 @@ struct Polled {
     history: Option<PathBuf>,
     herdr_version: String,
     inventory: Shared,
+    router: Option<Arc<Router>>,
 }
 
 impl Polled {
@@ -381,16 +393,40 @@ async fn poll(
                 continue;
             }
         }
-        match host.list_agents().await {
-            Ok(agents) => {
-                if herdr_down {
-                    info!("herdr answers again");
-                    herdr_down = false;
-                    let v = p.herdr_version.clone();
-                    if !p.inventory(&tx, |i| i.herdr = v).await {
-                        return;
-                    }
+        let listed = host.list_agents().await;
+        // With the router, herdr's state is its own: the list comes from
+        // the terminal host too.
+        let herdr_ok = match &p.router {
+            Some(r) => r.herdr_up(),
+            None => listed.is_ok(),
+        };
+        if herdr_ok == herdr_down {
+            herdr_down = !herdr_ok;
+            if herdr_ok {
+                info!("herdr answers");
+            } else {
+                warn!("herdr does not answer");
+            }
+        }
+        let driver = p.router.as_ref().map(|r| r.driver().to_string());
+        let version = if herdr_ok {
+            p.herdr_version.clone()
+        } else {
+            String::new()
+        };
+        if !p
+            .inventory(&tx, |i| {
+                i.herdr = version;
+                if let Some(d) = driver {
+                    i.driver = d;
                 }
+            })
+            .await
+        {
+            return;
+        }
+        match listed {
+            Ok(agents) => {
                 let sig = signature(&agents);
                 if sig != last_agents {
                     last_agents = sig;
@@ -403,15 +439,7 @@ async fn poll(
                     }
                 }
             }
-            Err(e) => {
-                if !herdr_down {
-                    warn!("herdr: {e}");
-                    herdr_down = true;
-                    if !p.inventory(&tx, |i| i.herdr.clear()).await {
-                        return;
-                    }
-                }
-            }
+            Err(e) => tracing::debug!("listing agents: {e}"),
         }
         let dir = home_dir.clone();
         let files = tokio::task::spawn_blocking(move || home::scan(&dir))
@@ -483,6 +511,7 @@ mod tests {
                 version: "2.3.1 (Claude Code)".into(),
             }],
             history: None,
+            router: None,
             ping_timeout: PING_TIMEOUT,
         }
     }
