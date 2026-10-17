@@ -47,7 +47,9 @@ if ! command -v herdr >/dev/null 2>&1; then
   echo "pitupitu needs herdr: https://herdr.dev"
 fi
 
-if [ -r /dev/tty ]; then
+# `-r /dev/tty` is true even without a controlling terminal; opening it
+# is the real test.
+if (exec </dev/tty) 2>/dev/null; then
   "$dir/pitupitu" setup </dev/tty
 else
   echo "next: pitupitu setup"
