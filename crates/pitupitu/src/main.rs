@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| "pitupitu=info,herdr=warn".into()),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
     let cli = Cli::parse();
     let path = cli.config.unwrap_or_else(config::default_path);
