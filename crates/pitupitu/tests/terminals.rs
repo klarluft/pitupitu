@@ -27,6 +27,17 @@ while IFS= read -r line; do
 done
 "#;
 
+/// The holder, stopped when the test ends, passed or not: a holder with
+/// terminals open keeps running by design.
+struct Holder(std::process::Child);
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 async fn call(socket: &Path, req: Value) -> Value {
     let stream = UnixStream::connect(socket).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -77,14 +88,16 @@ async fn an_agent_in_the_box_s_own_terminals() {
     let socket = dir.path().join("terms.sock");
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
 
-    let mut holder = std::process::Command::new(&exe)
-        .arg("terminals")
-        .env("PITUPITU_TERMS_SOCKET", &socket)
-        .env("PATH", &path)
-        .env("SHELL", &shell)
-        .env("FAKE_PITUPITU", &exe)
-        .spawn()
-        .unwrap();
+    let mut holder = Holder(
+        std::process::Command::new(&exe)
+            .arg("terminals")
+            .env("PITUPITU_TERMS_SOCKET", &socket)
+            .env("PATH", &path)
+            .env("SHELL", &shell)
+            .env("FAKE_PITUPITU", &exe)
+            .spawn()
+            .unwrap(),
+    );
     let end = Instant::now() + Duration::from_secs(5);
     while UnixStream::connect(&socket).await.is_err() {
         assert!(Instant::now() < end, "holder did not start");
@@ -209,7 +222,7 @@ async fn an_agent_in_the_box_s_own_terminals() {
     .await;
     let end = Instant::now() + Duration::from_secs(5);
     loop {
-        if holder.try_wait().unwrap().is_some() {
+        if holder.0.try_wait().unwrap().is_some() {
             break;
         }
         assert!(Instant::now() < end, "holder did not exit");
