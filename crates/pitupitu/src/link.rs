@@ -4,12 +4,13 @@
 
 use crate::calls::{self, CallError};
 use crate::home;
+use crate::inventory::{self, Available, Inventory};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use herdr::{AgentHost, AgentInfo};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -18,7 +19,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// How often herdr's agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -28,6 +29,8 @@ const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// A link that stayed up this long starts the backoff over.
 const STABLE: Duration = Duration::from_secs(30);
+/// How often the recent project folders are looked at again.
+const INVENTORY_EVERY: Duration = Duration::from_secs(300);
 
 pub struct Link {
     pub url: String,
@@ -36,9 +39,18 @@ pub struct Link {
     pub home: PathBuf,
     pub herdr_version: String,
     pub host: Arc<dyn AgentHost>,
+    /// The agent CLIs found on `PATH` when the agent started.
+    pub available: Vec<Available>,
+    /// Where the agents keep their session history (the user's home
+    /// directory); `None` sends no recent folders.
+    pub history: Option<PathBuf>,
     /// Shortened in tests.
     pub ping_timeout: Duration,
 }
+
+/// The inventory as last sent, shared by the poller and the handler of
+/// the cloud's notes.
+type Shared = Arc<Mutex<Inventory>>;
 
 /// Why a link ended.
 #[derive(Debug, PartialEq)]
@@ -100,22 +112,35 @@ impl Link {
             .with_context(|| format!("connecting to {}", self.url))?;
         let (mut sink, mut stream) = ws.split();
 
-        let agents = match self.host.list_agents().await {
-            Ok(a) => a,
+        let (agents, herdr_up) = match self.host.list_agents().await {
+            Ok(a) => (a, true),
             Err(e) => {
                 warn!("herdr: {e}; is herdr running?");
-                Vec::new()
+                (Vec::new(), false)
             }
         };
-        let hello = json!({
+        let inv = Inventory {
+            driver: "herdr".into(),
+            herdr: if herdr_up {
+                self.herdr_version.clone()
+            } else {
+                String::new()
+            },
+            available: self.available.clone(),
+            recent: self.recent().await,
+        };
+        let mut hello = json!({
             "note": "hello",
             "protocol": PROTOCOL,
             "version": env!("CARGO_PKG_VERSION"),
             "box": self.box_name,
-            "herdr": self.herdr_version,
             "home": self.home,
             "agents": agents,
         });
+        if let (Value::Object(h), Ok(Value::Object(i))) = (&mut hello, serde_json::to_value(&inv)) {
+            h.extend(i);
+        }
+        let shared: Shared = Arc::new(Mutex::new(inv));
         sink.send(text(&hello)).await?;
         let files = home::scan(&self.home);
         sink.send(text(&json!({"note": "home", "files": files})))
@@ -124,8 +149,13 @@ impl Link {
 
         let (tx, mut rx) = mpsc::channel::<Value>(64);
         let poller = tokio::spawn(poll(
-            self.host.clone(),
-            self.home.clone(),
+            Polled {
+                host: self.host.clone(),
+                home_dir: self.home.clone(),
+                history: self.history.clone(),
+                herdr_version: self.herdr_version.clone(),
+                inventory: shared.clone(),
+            },
             signature(&agents),
             files,
             tx.clone(),
@@ -142,7 +172,7 @@ impl Link {
                         Some(m) => m.context("reading from the cloud")?,
                     };
                     match msg {
-                        Message::Text(t) => self.incoming(t.as_str(), &tx),
+                        Message::Text(t) => self.incoming(t.as_str(), &tx, &shared),
                         // Pong answers are queued by the library and flushed
                         // on the next read or write.
                         Message::Ping(_) => last_ping = Instant::now(),
@@ -172,13 +202,17 @@ impl Link {
     /// A frame from the cloud: a call is run on its own task, the reply
     /// goes back through `tx`. Only the call's name is logged, never its
     /// arguments or result.
-    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>) {
+    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>, shared: &Shared) {
         let Ok(value) = serde_json::from_str::<Value>(frame) else {
             warn!("unreadable frame from the cloud");
             return;
         };
         if let Some(note) = value.get("note").and_then(Value::as_str) {
-            debug!(note, "note from the cloud");
+            if note == "settings" {
+                self.settings(&value, tx, shared);
+            } else {
+                debug!(note, "note from the cloud");
+            }
             return;
         }
         let Some(id) = value.get("id").cloned() else {
@@ -216,6 +250,45 @@ impl Link {
     }
 }
 
+impl Link {
+    async fn recent(&self) -> Vec<inventory::Recent> {
+        match self.history.clone() {
+            Some(h) => tokio::task::spawn_blocking(move || inventory::recent(&h))
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `{"note": "settings", "driver": …}`: which driver the person chose
+    /// for this box. This version only has herdr; the terminal host comes
+    /// in a later one. Answered with the inventory as it stands.
+    fn settings(&self, value: &Value, tx: &mpsc::Sender<Value>, shared: &Shared) {
+        let wanted = value
+            .get("driver")
+            .and_then(Value::as_str)
+            .unwrap_or("auto");
+        match wanted {
+            "terminal" => warn!(
+                "this box is set to use its own terminals, which this version of pitupitu \
+                 does not have yet; staying with herdr"
+            ),
+            _ => info!(driver = wanted, "driver setting"),
+        }
+        let note = inventory_note(&shared.lock().unwrap());
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(note).await;
+        });
+    }
+}
+
+fn inventory_note(inv: &Inventory) -> Value {
+    let mut note = serde_json::to_value(inv).unwrap_or_else(|_| json!({}));
+    note["note"] = json!("inventory");
+    note
+}
+
 fn text(v: &Value) -> Message {
     Message::Text(v.to_string().into())
 }
@@ -248,25 +321,75 @@ fn signature(agents: &[AgentInfo]) -> Signature {
     sig
 }
 
-/// Once a second: send `agents` when herdr's list changed, `home` when the
-/// pitupitu files did.
-async fn poll(
+/// What the poller looks at.
+struct Polled {
     host: Arc<dyn AgentHost>,
     home_dir: PathBuf,
+    history: Option<PathBuf>,
+    herdr_version: String,
+    inventory: Shared,
+}
+
+impl Polled {
+    /// Send an `inventory` note if `change` alters what was last sent.
+    async fn inventory(
+        &self,
+        tx: &mpsc::Sender<Value>,
+        change: impl FnOnce(&mut Inventory),
+    ) -> bool {
+        let note = {
+            let mut inv = self.inventory.lock().unwrap();
+            let before = inv.clone();
+            change(&mut inv);
+            (*inv != before).then(|| inventory_note(&inv))
+        };
+        match note {
+            Some(n) => tx.send(n).await.is_ok(),
+            None => true,
+        }
+    }
+}
+
+/// Once a second: send `agents` when herdr's list changed, `home` when the
+/// pitupitu files did, `inventory` when herdr comes or goes; every five
+/// minutes, `inventory` when the recent folders changed.
+async fn poll(
+    p: Polled,
     mut last_agents: Signature,
     mut last_files: Vec<home::HomeFile>,
     tx: mpsc::Sender<Value>,
 ) {
+    let host = p.host.clone();
+    let home_dir = p.home_dir.clone();
     let mut tick = tokio::time::interval(POLL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut herdr_down = false;
+    let mut recent_tick = tokio::time::interval(INVENTORY_EVERY);
+    recent_tick.tick().await;
+    let mut herdr_down = p.inventory.lock().unwrap().herdr.is_empty();
     loop {
-        tick.tick().await;
+        tokio::select! {
+            _ = tick.tick() => {}
+            _ = recent_tick.tick() => {
+                if let Some(h) = p.history.clone() {
+                    let recent = tokio::task::spawn_blocking(move || inventory::recent(&h))
+                        .await
+                        .unwrap_or_default();
+                    if !p.inventory(&tx, |i| i.recent = recent).await {
+                        return;
+                    }
+                }
+                continue;
+            }
+        }
         match host.list_agents().await {
             Ok(agents) => {
                 if herdr_down {
                     info!("herdr answers again");
                     herdr_down = false;
+                    let v = p.herdr_version.clone();
+                    if !p.inventory(&tx, |i| i.herdr = v).await {
+                        return;
+                    }
                 }
                 let sig = signature(&agents);
                 if sig != last_agents {
@@ -284,6 +407,9 @@ async fn poll(
                 if !herdr_down {
                     warn!("herdr: {e}");
                     herdr_down = true;
+                    if !p.inventory(&tx, |i| i.herdr.clear()).await {
+                        return;
+                    }
                 }
             }
         }
@@ -352,6 +478,11 @@ mod tests {
             home,
             herdr_version: "herdr 0.9.3".into(),
             host: Arc::new(host),
+            available: vec![Available {
+                kind: "claude".into(),
+                version: "2.3.1 (Claude Code)".into(),
+            }],
+            history: None,
             ping_timeout: PING_TIMEOUT,
         }
     }
@@ -372,14 +503,17 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 1);
+        assert_eq!(hello["protocol"], 2);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], "herdr 0.9.3");
+        assert_eq!(hello["driver"], "herdr");
+        assert_eq!(hello["available"][0]["kind"], "claude");
+        assert_eq!(hello["recent"], json!([]));
         assert_eq!(hello["agents"][0]["name"], "notes");
         assert_eq!(hello["home"], json!(dir.path()));
         let home_note = next_json(&mut ws).await;
         assert_eq!(home_note["note"], "home");
-        assert_eq!(home_note["files"][0]["path"], "PITUPITU.md");
+        assert_eq!(home_note["files"], json!([]));
 
         // Overlapping calls are answered in any order, each by its id.
         for frame in [
@@ -407,10 +541,20 @@ mod tests {
         let note = next_json(&mut ws).await;
         assert_eq!(note["note"], "agents");
         assert_eq!(note["agents"][0]["agent_status"], "done");
-        std::fs::write(dir.path().join("PITUPITU.md"), "I like Opus.").unwrap();
+        std::fs::create_dir_all(dir.path().join("skills/deploy")).unwrap();
+        std::fs::write(dir.path().join("skills/deploy/SKILL.md"), "Deploy steps.").unwrap();
         let note = next_json(&mut ws).await;
         assert_eq!(note["note"], "home");
-        assert_eq!(note["files"][0]["text"], "I like Opus.");
+        assert_eq!(note["files"][0]["text"], "Deploy steps.");
+
+        // The driver setting is answered with the inventory; this version
+        // stays on herdr whatever is asked.
+        ws.send(text(&json!({"note": "settings", "driver": "terminal"})))
+            .await
+            .unwrap();
+        let note = next_json(&mut ws).await;
+        assert_eq!(note["note"], "inventory");
+        assert_eq!(note["driver"], "herdr");
 
         ws.close(Some(CloseFrame {
             code: CloseCode::from(4006),

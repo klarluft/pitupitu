@@ -1,21 +1,26 @@
-//! `pitupitu`, the box agent: it links herdr on this machine to pitupitu
-//! cloud, where the conversation happens. `setup` signs the box in, makes
-//! the home folder and installs the user service; `connect` is what the
-//! service runs.
+//! `pitupitu`, the box agent: it links this machine to pitupitu cloud,
+//! where the conversation happens. `setup` signs the box in, makes the home
+//! folder and installs the user service; `connect` is what the service
+//! runs; `prefs`, `box`, `default` and `settings` change the account's
+//! settings; `--skill` teaches the person's agents all of this.
 
 mod calls;
 mod config;
 mod device;
 mod home;
+mod inventory;
 mod link;
 mod service;
+mod settings;
+mod skill;
 #[cfg(test)]
 mod testhost;
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use config::Config;
 use herdr::HerdrCli;
+use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,8 +35,14 @@ struct Cli {
     /// Config file (default: $PITUPITU_CONFIG or ~/.config/pitupitu/pitupitu.toml).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Print JSON instead of text (settings commands).
+    #[arg(long, global = true)]
+    json: bool,
+    /// Print the skill that teaches an agent to install and configure pitupitu.
+    #[arg(long)]
+    skill: bool,
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -60,6 +71,69 @@ enum Cmd {
     Status,
     /// Stop and remove the user service. The config and home folder stay.
     Uninstall,
+    /// What pitupitu knows about you and your machines (read in every conversation).
+    Prefs {
+        #[command(subcommand)]
+        action: Option<PrefsCmd>,
+    },
+    /// This box's note and driver.
+    #[command(name = "box")]
+    Box {
+        #[command(subcommand)]
+        action: BoxCmd,
+    },
+    /// The box used when a request does not say which.
+    Default {
+        /// A box name, as `pitupitu settings` lists them.
+        #[arg(required_unless_present = "clear")]
+        name: Option<String>,
+        /// No default: pitupitu asks.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// All of the account's settings and boxes.
+    Settings,
+    /// The pitupitu skill for Claude Code and Codex.
+    Skill {
+        #[command(subcommand)]
+        action: SkillCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrefsCmd {
+    /// Print the preferences (the default).
+    Show,
+    /// Edit them in $VISUAL or $EDITOR.
+    Edit,
+    /// Replace them with a file's text (`-` reads stdin).
+    Set { file: PathBuf },
+    /// Remove them.
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum BoxCmd {
+    /// One line about this box ("client work, Acme").
+    Note {
+        #[arg(required_unless_present = "clear")]
+        text: Vec<String>,
+        #[arg(long)]
+        clear: bool,
+    },
+    /// What runs agent sessions here: auto (herdr when it runs), herdr or terminal.
+    Driver {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::DRIVERS))]
+        driver: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillCmd {
+    /// Print SKILL.md (same as `pitupitu --skill`).
+    Print,
+    /// Install it for Claude Code (~/.claude/skills) and Codex (~/.codex/skills).
+    Install,
 }
 
 #[tokio::main]
@@ -74,7 +148,16 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let path = cli.config.unwrap_or_else(config::default_path);
-    match cli.cmd {
+    let as_json = cli.json;
+    if cli.skill {
+        print!("{}", skill::SKILL);
+        return Ok(());
+    }
+    let Some(cmd) = cli.cmd else {
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+    match cmd {
         Cmd::Setup {
             home,
             relink,
@@ -101,6 +184,86 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Prefs { action } => {
+            let cfg = Config::load(&path)?;
+            let changed = match action.unwrap_or(PrefsCmd::Show) {
+                PrefsCmd::Show => {
+                    let s = settings::get(&cfg).await?;
+                    if as_json {
+                        println!("{}", json!({"preferences": s["preferences"]}));
+                    } else {
+                        match s["preferences"].as_str() {
+                            Some(p) => println!("{p}"),
+                            None => {
+                                eprintln!("no preferences yet; `pitupitu prefs edit` writes some")
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                PrefsCmd::Edit => match settings::edit(&cfg).await? {
+                    Some(s) => s,
+                    None => {
+                        eprintln!("unchanged");
+                        return Ok(());
+                    }
+                },
+                PrefsCmd::Set { file } => {
+                    let text = settings::clean(&settings::read_text(&file)?);
+                    settings::patch(&cfg, json!({"preferences": settings::text_or_null(&text)}))
+                        .await?
+                }
+                PrefsCmd::Clear => settings::patch(&cfg, json!({"preferences": null})).await?,
+            };
+            done(&changed, as_json, "preferences saved");
+            Ok(())
+        }
+        Cmd::Box { action } => {
+            let cfg = Config::load(&path)?;
+            let change = match action {
+                BoxCmd::Note { text, clear } => {
+                    let note = if clear { String::new() } else { text.join(" ") };
+                    json!({"note": settings::text_or_null(&note)})
+                }
+                BoxCmd::Driver { driver } => json!({"driver": driver}),
+            };
+            let s = settings::patch(&cfg, change).await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Default { name, clear } => {
+            let cfg = Config::load(&path)?;
+            let value = if clear { Value::Null } else { json!(name) };
+            let s = settings::patch(&cfg, json!({"default_box": value})).await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Settings => {
+            let cfg = Config::load(&path)?;
+            settings::print(&settings::get(&cfg).await?, as_json);
+            Ok(())
+        }
+        Cmd::Skill { action } => {
+            match action {
+                SkillCmd::Print => print!("{}", skill::SKILL),
+                SkillCmd::Install => {
+                    for f in skill::install(&config::home_dir())? {
+                        eprintln!("wrote {}", f.display());
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// After a change: the settings as they now are.
+fn done(settings: &Value, as_json: bool, what: &str) {
+    if as_json {
+        settings::print(settings, true);
+    } else {
+        eprintln!("{what}");
+        settings::print(settings, false);
     }
 }
 
@@ -114,6 +277,7 @@ async fn connect(cfg: &Config) -> Result<()> {
         tracing::warn!("herdr: {e}");
         String::new()
     });
+    let available = inventory::available().await;
     let link = link::Link {
         url: cfg.box_url(),
         api_key,
@@ -121,6 +285,8 @@ async fn connect(cfg: &Config) -> Result<()> {
         home,
         herdr_version,
         host: Arc::new(herdr),
+        available,
+        history: Some(config::home_dir()),
         ping_timeout: link::PING_TIMEOUT,
     };
     tokio::select! {
@@ -219,7 +385,27 @@ async fn setup(
     config::set(path, &[("home", "path", &home.display().to_string())])?;
     eprintln!("  home folder: {}", home.display());
 
-    // 3. The service.
+    // 3. The skill, offered once to a person at a terminal.
+    let skill_file = config::home_dir().join(".claude/skills/pitupitu/SKILL.md");
+    if !skill_file.exists() {
+        if std::io::stdin().is_terminal() {
+            let yes = ask(
+                "teach Claude Code and Codex how to configure pitupitu (installs a skill)? y/n",
+                "y",
+            );
+            if yes.to_lowercase().starts_with('y') {
+                for f in skill::install(&config::home_dir())? {
+                    eprintln!("  wrote {}", f.display());
+                }
+            }
+        } else {
+            eprintln!(
+                "  `pitupitu skill install` teaches Claude Code and Codex to configure pitupitu"
+            );
+        }
+    }
+
+    // 4. The service.
     if no_service {
         eprintln!();
         eprintln!("  run `pitupitu connect` to link this box");
@@ -262,6 +448,21 @@ async fn status(cfg: &Config) -> Result<()> {
         .await
         .unwrap_or_else(|e| format!("not found ({e})"));
     println!("herdr: {herdr}");
+    let agents = inventory::available().await;
+    println!(
+        "agents: {}",
+        if agents.is_empty() {
+            "none found on PATH".to_string()
+        } else {
+            agents
+                .iter()
+                .map(|a| format!("{} ({})", a.kind, a.version))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    let recent = inventory::recent(&config::home_dir());
+    println!("recent project folders: {}", recent.len());
     println!("service: {}", service::status());
     Ok(())
 }
