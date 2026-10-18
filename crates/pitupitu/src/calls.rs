@@ -86,6 +86,10 @@ fn ok<T: Serialize>(value: T) -> Result<Value, CallError> {
 struct CreateWorkspace {
     cwd: PathBuf,
     label: String,
+    /// The cloud's hint where the session should run (`terminal` for
+    /// scratch work); honoured only while the driver setting is `auto`.
+    #[serde(default)]
+    driver: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -169,7 +173,9 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         "list_workspaces" => ok(host.list_workspaces().await?),
         "create_workspace" => {
             let a: CreateWorkspace = args(call, a)?;
-            ok(host.create_workspace(&a.cwd, &a.label).await?)
+            ok(host
+                .create_workspace_hinted(&a.cwd, &a.label, a.driver.as_deref())
+                .await?)
         }
         "create_tab" => {
             let a: CreateTab = args(call, a)?;

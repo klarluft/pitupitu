@@ -92,6 +92,25 @@ impl AgentHost for Router {
         self.new_sessions().create_workspace(cwd, label).await
     }
 
+    /// The cloud's hint (`terminal` for scratch work such as lookups, so
+    /// herdr is not littered with them) counts only while the setting is
+    /// `auto`; a forced `herdr` or `terminal` wins.
+    async fn create_workspace_hinted(
+        &self,
+        cwd: &Path,
+        label: &str,
+        driver: Option<&str>,
+    ) -> Result<Created> {
+        let wanted = self.wanted.lock().unwrap().clone();
+        let auto = !matches!(wanted.as_str(), "herdr" | "terminal");
+        let host: &dyn AgentHost = match (auto, driver) {
+            (true, Some("terminal")) => &*self.terms,
+            (true, Some("herdr")) if self.herdr_up() => &*self.herdr,
+            _ => self.new_sessions(),
+        };
+        host.create_workspace(cwd, label).await
+    }
+
     async fn create_tab(
         &self,
         workspace: &WorkspaceId,
@@ -196,5 +215,46 @@ mod tests {
         r.read("tw1:p1", 10).await.unwrap();
         assert_eq!(terms.log(), ["read pitu-x 10", "read tw1:p1 10"]);
         assert_eq!(herdr.log(), ["read notes 10"]);
+    }
+
+    #[tokio::test]
+    async fn the_clouds_hint_counts_only_under_auto() {
+        let herdr = FakeHost::default();
+        herdr
+            .agents
+            .lock()
+            .unwrap()
+            .push(agent("notes", "w1:p1", AgentStatus::Idle, 1));
+        let terms = FakeHost::default();
+        let r = Router::new(Arc::new(herdr.clone()), Arc::new(terms.clone()));
+        r.list_agents().await.unwrap();
+        assert!(r.herdr_up());
+
+        // auto: a lookup goes to the terminal host when the cloud says so,
+        // a project task to herdr as usual.
+        let p = Path::new("/home/me/pitupitu");
+        r.create_workspace_hinted(p, "pitupitu", Some("terminal"))
+            .await
+            .unwrap();
+        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", None)
+            .await
+            .unwrap();
+        assert_eq!(terms.log(), ["create_workspace /home/me/pitupitu pitupitu"]);
+        assert_eq!(herdr.log(), ["create_workspace /home/me/code/app app"]);
+
+        // Forced herdr: the hint is ignored.
+        r.set_wanted("herdr");
+        r.create_workspace_hinted(p, "pitupitu", Some("terminal"))
+            .await
+            .unwrap();
+        assert_eq!(herdr.log().len(), 2);
+        assert_eq!(terms.log().len(), 1);
+
+        // Forced terminal: everything goes there, hint or not.
+        r.set_wanted("terminal");
+        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", Some("herdr"))
+            .await
+            .unwrap();
+        assert_eq!(terms.log().len(), 2);
     }
 }

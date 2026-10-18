@@ -60,7 +60,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | call | args | ok |
 |---|---|---|
 | `list_workspaces` | — | `[Workspace]` |
-| `create_workspace` | `cwd`, `label` | `Created` |
+| `create_workspace` | `cwd`, `label`, `driver?` (`terminal` or `herdr`: where the cloud would like the session, e.g. `terminal` for scratch work such as lookups so herdr is not littered with them; honoured only while the box's driver setting is `auto`; since 0.3.2) | `Created` |
 | `create_tab` | `workspace`, `cwd?`, `label` | `Created` |
 | `close_workspace` | `workspace` | `null` |
 | `close_tab` | `tab` | `null` |
