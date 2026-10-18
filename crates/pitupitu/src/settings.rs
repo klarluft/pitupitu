@@ -13,6 +13,18 @@ use std::path::Path;
 
 pub const DRIVERS: &[&str] = &["auto", "herdr", "terminal"];
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
+/// The agents a default can name; `auto` clears it.
+pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
+pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
+
+/// `auto` is no default at all.
+pub fn agent_or_null(name: &str) -> Value {
+    if name == "auto" {
+        Value::Null
+    } else {
+        json!(name)
+    }
+}
 
 fn endpoint(cfg: &Config) -> Result<(String, String)> {
     let Some(key) = cfg.api_key.clone() else {
@@ -93,6 +105,23 @@ pub fn print(settings: &Value, as_json: bool) {
             _ => "mine (only what pitupitu started)",
         }
     );
+    let models: Vec<String> = settings["agent_models"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| v.as_str().map(|m| format!("{k} on {m}")))
+        .collect();
+    println!(
+        "agent: {}{}",
+        settings["default_agent"]
+            .as_str()
+            .unwrap_or("auto (what the machine has, Claude first)"),
+        if models.is_empty() {
+            String::new()
+        } else {
+            format!("; models: {}", models.join(", "))
+        }
+    );
     println!(
         "voice: {}; patience: {} ms",
         settings["voice"].as_str().unwrap_or("default"),
@@ -116,6 +145,9 @@ pub fn print(settings: &Value, as_json: bool) {
             },
             b["driver"].as_str().unwrap_or("auto")
         );
+        if let Some(a) = b["agent"].as_str() {
+            line.push_str(&format!(", agent {a}"));
+        }
         if let Some(n) = b["note"].as_str() {
             line.push_str(&format!(" — {n}"));
         }

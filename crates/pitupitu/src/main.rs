@@ -90,6 +90,24 @@ enum Cmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::UPDATES))]
         mode: String,
     },
+    /// The agent a session gets when you don't say: claude, codex, or auto
+    /// (whatever the machine has, Claude first).
+    Agent {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
+        name: String,
+    },
+    /// The model an agent runs on when you don't say (`pitupitu model claude opus`).
+    Model {
+        /// claude or codex.
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENT_KINDS))]
+        agent: String,
+        /// The model as the CLI names it (opus, sonnet, gpt-5, …).
+        #[arg(required_unless_present = "clear")]
+        model: Option<String>,
+        /// Back to the agent's own default model.
+        #[arg(long)]
+        clear: bool,
+    },
     /// The box used when a request does not say which.
     Default {
         /// A box name, as `pitupitu settings` lists them.
@@ -157,6 +175,11 @@ enum BoxCmd {
     /// Switch this box off: it stays linked, but pitupitu starts nothing here
     /// and does not watch its sessions until it is on again.
     Off,
+    /// This box's own default agent: claude, codex, or auto (the account's).
+    Agent {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -259,6 +282,7 @@ async fn main() -> Result<()> {
                 BoxCmd::Driver { driver } => json!({"driver": driver}),
                 BoxCmd::On => json!({"enabled": true}),
                 BoxCmd::Off => json!({"enabled": false}),
+                BoxCmd::Agent { name } => json!({"agent": settings::agent_or_null(&name)}),
             };
             let s = settings::patch(&cfg, change).await?;
             done(&s, as_json, "saved");
@@ -274,6 +298,31 @@ async fn main() -> Result<()> {
         Cmd::Updates { mode } => {
             let cfg = Config::load(&path)?;
             let s = settings::patch(&cfg, json!({"updates": mode})).await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Agent { name } => {
+            let cfg = Config::load(&path)?;
+            let s = settings::patch(
+                &cfg,
+                json!({"default_agent": settings::agent_or_null(&name)}),
+            )
+            .await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Model {
+            agent,
+            model,
+            clear,
+        } => {
+            let cfg = Config::load(&path)?;
+            let value = if clear {
+                Value::Null
+            } else {
+                json!(model.unwrap_or_default().trim().to_lowercase())
+            };
+            let s = settings::patch(&cfg, json!({"agent_models": {agent: value}})).await?;
             done(&s, as_json, "saved");
             Ok(())
         }
