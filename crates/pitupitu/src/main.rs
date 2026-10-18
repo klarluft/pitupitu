@@ -108,6 +108,13 @@ enum Cmd {
         #[arg(long)]
         clear: bool,
     },
+    /// Folders on this box with a name you say ("in acme, run the tests").
+    Place {
+        #[command(subcommand)]
+        action: PlaceCmd,
+    },
+    /// Every named folder, on every box.
+    Places,
     /// The box used when a request does not say which.
     Default {
         /// A box name, as `pitupitu settings` lists them.
@@ -180,6 +187,19 @@ enum BoxCmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum PlaceCmd {
+    /// Name a folder on this box (`pitupitu place add acme ~/work/acme-api`).
+    Add {
+        /// One or two words, as you will say them.
+        name: String,
+        /// The folder (made absolute).
+        path: PathBuf,
+    },
+    /// Drop a name; the folder is untouched.
+    Rm { name: String },
 }
 
 #[derive(Subcommand)]
@@ -324,6 +344,31 @@ async fn main() -> Result<()> {
             };
             let s = settings::patch(&cfg, json!({"agent_models": {agent: value}})).await?;
             done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Place { action } => {
+            let cfg = Config::load(&path)?;
+            let change = match action {
+                PlaceCmd::Add { name, path } => {
+                    let abs = std::path::absolute(&path)
+                        .map_err(|e| anyhow::anyhow!("resolving {}: {e}", path.display()))?;
+                    let name = name.trim().to_lowercase();
+                    json!({"places": {name: abs.to_string_lossy()}})
+                }
+                PlaceCmd::Rm { name } => json!({"places": {name.trim().to_lowercase(): null}}),
+            };
+            let s = settings::patch(&cfg, change).await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Places => {
+            let cfg = Config::load(&path)?;
+            let s = settings::get(&cfg).await?;
+            if as_json {
+                println!("{}", json!({"places": s["places"]}));
+            } else {
+                settings::print_places(&s);
+            }
             Ok(())
         }
         Cmd::Settings => {

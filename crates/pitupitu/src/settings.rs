@@ -153,6 +153,34 @@ pub fn print(settings: &Value, as_json: bool) {
         }
         println!("{line}");
     }
+    print_places(settings);
+}
+
+/// The named folders, one line each (nothing when there are none).
+pub fn print_places(settings: &Value) {
+    let places: Vec<&Value> = settings["places"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    if places.is_empty() {
+        return;
+    }
+    let me = settings["box"].as_str().unwrap_or("");
+    println!("named folders:");
+    for p in places {
+        let b = p["box"].as_str().unwrap_or("?");
+        println!(
+            "  {} = {}{}",
+            p["name"].as_str().unwrap_or("?"),
+            p["path"].as_str().unwrap_or("?"),
+            if b == me {
+                String::new()
+            } else {
+                format!(" (on {b})")
+            }
+        );
+    }
 }
 
 /// The preferences text from a file, or from stdin for `-`.

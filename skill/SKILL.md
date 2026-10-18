@@ -29,6 +29,7 @@ Every command takes `--json` and never prompts when there is no terminal.
 - `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): only what it started; `all`: the person's own sessions too; `quiet`: nothing unless asked.
 - `pitupitu agent claude|codex|auto`: the agent a session gets when the person does not say (`auto`: whatever the machine has, Claude first). `pitupitu box agent claude|codex|auto`: this machine's own default over the account's.
 - `pitupitu model claude opus` / `pitupitu model codex gpt-5` / `pitupitu model claude --clear`: the model that agent runs on when the person does not say, as the CLI names it.
+- `pitupitu place add <name> <path>` / `pitupitu place rm <name>` / `pitupitu places`: folders on this machine with a name the person says ("in acme, run the tests"). Use it when they ask to name a project folder for pitupitu; the path is made absolute.
 
 Change preferences by reading them first (`pitupitu prefs --json`), editing the text, and writing it back whole with `pitupitu prefs set -`; keep what the person did not ask to change.
 
