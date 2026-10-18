@@ -9,7 +9,7 @@ pitupitu lets the person talk (on https://pitupitu.chat, phone or desktop) to a 
 
 ## Install and link this machine
 
-1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin` and runs setup when there is a terminal; without one, run step 2 yourself.
+1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin` and runs setup when there is a terminal; without one, run step 2 yourself. Where Homebrew is the person's way of installing tools, `brew install klarluft/tap/pitupitu` instead, then step 2.
 2. Link: `pitupitu setup --home ~/pitupitu`. It prints a short code and a URL. **The person must approve the code themselves** in their browser while signed in to pitupitu.chat: show them the code and URL and wait. Never try to approve it for them. `--box <name>` sets how this machine is named (default: its hostname); `--no-browser` only prints the URL.
 3. Setup installs a user service that keeps the link open. Check with `pitupitu status`.
 
