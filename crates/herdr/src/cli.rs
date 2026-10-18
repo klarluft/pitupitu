@@ -71,6 +71,28 @@ impl HerdrCli {
             .ok_or_else(|| Error::Shape(format!("no `result` in {}", stdout.trim())))
     }
 
+    /// The agent's recent transcript, with its colours when asked (older
+    /// herdrs know no `--format`, so the plain read never passes it).
+    async fn read_as(&self, agent: &str, lines: u32, ansi: bool) -> Result<String> {
+        let lines = lines.to_string();
+        let read = |source: &'static str| {
+            let mut args = vec![
+                "agent", "read", agent, "--source", source, "--lines", &lines,
+            ];
+            if ansi {
+                args.extend(["--format", "ansi"]);
+            }
+            args
+        };
+        let recent = self.run_text(&read("recent-unwrapped")).await?;
+        if !blank(&recent) {
+            return Ok(recent);
+        }
+        // Dialogs (Claude Code's question UI, approvals) live on a screen
+        // that `recent` does not see; the rendered viewport does.
+        self.run_text(&read("visible")).await
+    }
+
     /// Run a command whose success output is plain text (`agent read`).
     async fn run_text(&self, args: &[&str]) -> Result<String> {
         let (status, stdout, stderr) = self.exec(args).await?;
@@ -120,6 +142,21 @@ impl HerdrCli {
         self.send_keys(agent, keys).await?;
         Ok(true)
     }
+}
+
+/// Whether a transcript shows nothing, its SGR codes aside.
+fn blank(text: &str) -> bool {
+    let mut in_code = false;
+    for ch in text.chars() {
+        match ch {
+            '\x1b' => in_code = true,
+            'm' if in_code => in_code = false,
+            _ if in_code => {}
+            c if !c.is_whitespace() => return false,
+            _ => {}
+        }
+    }
+    true
 }
 
 fn parse_api_error(text: &str) -> Option<Error> {
@@ -327,32 +364,28 @@ impl AgentHost for HerdrCli {
     }
 
     async fn read(&self, agent: &str, lines: u32) -> Result<String> {
-        let lines = lines.to_string();
-        let recent = self
-            .run_text(&[
-                "agent",
-                "read",
-                agent,
-                "--source",
-                "recent-unwrapped",
-                "--lines",
-                &lines,
-            ])
-            .await?;
-        if !recent.trim().is_empty() {
-            return Ok(recent);
-        }
-        // Dialogs (Claude Code's question UI, approvals) live on a screen
-        // that `recent` does not see; the rendered viewport does.
-        self.run_text(&[
-            "agent", "read", agent, "--source", "visible", "--lines", &lines,
-        ])
-        .await
+        self.read_as(agent, lines, false).await
+    }
+
+    async fn read_colored(&self, agent: &str, lines: u32) -> Result<String> {
+        self.read_as(agent, lines, true).await
     }
 
     async fn send_keys(&self, agent: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["agent", "send-keys", agent];
         args.extend_from_slice(keys);
         self.run_json(&args).await.map(drop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_transcript_of_codes_and_spaces_is_blank() {
+        assert!(blank("\x1b[0m  \n\x1b[38;2;1;2;3m \x1b[m"));
+        assert!(!blank("\x1b[31mok\x1b[m"));
+        assert!(!blank("plain"));
     }
 }

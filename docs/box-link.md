@@ -69,7 +69,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `agent` | `agent` | `AgentInfo` |
 | `list_agents` | — | `[AgentInfo]` |
 | `wait` | `agent`, `until` (status strings), `timeout_ms` (capped at 120000) | `AgentInfo` |
-| `read` | `agent`, `lines` (capped at 2000) | string |
+| `read` | `agent`, `lines` (capped at 2000), `color` (optional, default false) | string; with `color`, colours and attributes come as SGR codes (`ESC [ … m`) and no other escapes, for a page showing the screen |
 | `send_keys` | `agent`, `keys` | `null` |
 
 An unknown call answers `bad_call`, so calls can be added behind a protocol bump without breaking older boxes. There is no other way for the cloud to act on the box.
