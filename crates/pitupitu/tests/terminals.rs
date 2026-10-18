@@ -73,8 +73,10 @@ async fn an_agent_in_the_box_s_own_terminals() {
     let bin = dir.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     // A login shell would read the profiles and lose the stand-in's PATH.
+    // Slow to start, like a login shell with a long rc: the holder must
+    // not type into the pane before the shell is reading.
     let shell = bin.join("testshell");
-    std::fs::write(&shell, "#!/bin/sh\nexec /bin/sh\n").unwrap();
+    std::fs::write(&shell, "#!/bin/sh\nsleep 0.3\nexec /bin/sh\n").unwrap();
     let fake = bin.join("claude");
     std::fs::write(&fake, FAKE_CLAUDE).unwrap();
     {
@@ -128,10 +130,16 @@ async fn an_agent_in_the_box_s_own_terminals() {
     assert_eq!(refused["err"]["code"], "unsupported_agent_kind");
 
     // Started, ready through its start hook, with the cloud's arguments.
+    // The command is over 1024 bytes wherever the binary is: typed into a
+    // PTY still in canonical mode, macOS would drop its tail, Enter
+    // included, and the agent would never run.
+    let _ = 0;
     let started = call(
         &socket,
         json!({"op": "start_agent", "name": "pitu-test", "kind": "claude", "pane": pane,
-               "accept_trust_prompt": true, "agent_args": ["--model", "haiku"], "timeout_ms": 10000}),
+               "accept_trust_prompt": true,
+               "agent_args": ["--model", "haiku", ],
+               "timeout_ms": 10000}),
     )
     .await;
     let info = &started["ok"];
@@ -140,11 +148,18 @@ async fn an_agent_in_the_box_s_own_terminals() {
     assert_eq!(info["workspace_id"], ws_id.as_str());
     let screen = call(
         &socket,
-        json!({"op": "read", "agent": "pitu-test", "lines": 40}),
+        json!({"op": "read", "agent": "pitu-test", "lines": 200}),
     )
     .await;
     let screen = screen["ok"].as_str().unwrap();
     assert!(screen.contains("--model haiku"), "{screen}");
+    // Typed once the shell was reading: echoed by the shell alone, not by
+    // the kernel before it.
+    assert_eq!(
+        screen.matches("claude --settings").count(),
+        1,
+        "the command typed before the shell was up: {screen}"
+    );
     assert!(
         screen.contains("--settings"),
         "hooks for this session only: {screen}"
