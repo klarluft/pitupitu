@@ -58,6 +58,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |
 | `pitupitu agent claude\|codex\|auto` | the agent a session gets when you don't say (`auto`: what the machine has, Claude first); `pitupitu box agent …` for this machine only |
 | `pitupitu model <agent> <model>` | the model that agent runs on when you don't say (`pitupitu model claude opus`); `--clear` for its own default |
+| `pitupitu place add <name> <path>` | a folder on this machine with a name you say ("in acme, run the tests"); `place rm <name>`, `pitupitu places` lists them all |
 | `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
 | `pitupitu sessions` | the sessions in this box's own terminals (when herdr is not used) |
 | `pitupitu attach [session]` | show one live here and type into it; `Ctrl-\` detaches, it keeps running |
