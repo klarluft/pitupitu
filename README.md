@@ -49,11 +49,13 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu setup` | sign in, home folder, user service (`--home`, `--relink`, `--box`, `--no-service`) |
 | `pitupitu connect` | hold the link open in the foreground (what the service runs) |
 | `pitupitu status` | account, home folder, herdr, agents found and service as this box sees them |
-| `pitupitu settings` | your preferences, default box, voice, and every box with its note and driver |
+| `pitupitu settings` | your preferences, default box, updates, voice, and every box with its note, driver and on/off |
 | `pitupitu prefs` | show your preferences; `prefs edit`, `prefs set <file>` (`-` for stdin), `prefs clear` |
 | `pitupitu box note <text>` | one line about this box ("client work, Acme"); `--clear` |
 | `pitupitu box driver auto\|herdr\|terminal` | what runs agent sessions here (`auto`: herdr when it runs) |
+| `pitupitu box on` / `box off` | off: stays linked, but pitupitu starts nothing here and ignores its sessions until on again |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
+| `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |
 | `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
 | `pitupitu sessions` | the sessions in this box's own terminals (when herdr is not used) |
 | `pitupitu attach [session]` | show one live here and type into it; `Ctrl-\` detaches, it keeps running |
