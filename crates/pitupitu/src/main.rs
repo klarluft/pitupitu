@@ -78,11 +78,17 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PrefsCmd>,
     },
-    /// This box's note and driver.
+    /// This box's note, driver and on/off.
     #[command(name = "box")]
     Box {
         #[command(subcommand)]
         action: BoxCmd,
+    },
+    /// What pitupitu brings up between turns unasked: mine (only what it
+    /// started), all (your own sessions too) or quiet (nothing unless asked).
+    Updates {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::UPDATES))]
+        mode: String,
     },
     /// The box used when a request does not say which.
     Default {
@@ -146,6 +152,11 @@ enum BoxCmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::DRIVERS))]
         driver: String,
     },
+    /// Switch this box on: pitupitu uses it again.
+    On,
+    /// Switch this box off: it stays linked, but pitupitu starts nothing here
+    /// and does not watch its sessions until it is on again.
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -246,6 +257,8 @@ async fn main() -> Result<()> {
                     json!({"note": settings::text_or_null(&note)})
                 }
                 BoxCmd::Driver { driver } => json!({"driver": driver}),
+                BoxCmd::On => json!({"enabled": true}),
+                BoxCmd::Off => json!({"enabled": false}),
             };
             let s = settings::patch(&cfg, change).await?;
             done(&s, as_json, "saved");
@@ -255,6 +268,12 @@ async fn main() -> Result<()> {
             let cfg = Config::load(&path)?;
             let value = if clear { Value::Null } else { json!(name) };
             let s = settings::patch(&cfg, json!({"default_box": value})).await?;
+            done(&s, as_json, "saved");
+            Ok(())
+        }
+        Cmd::Updates { mode } => {
+            let cfg = Config::load(&path)?;
+            let s = settings::patch(&cfg, json!({"updates": mode})).await?;
             done(&s, as_json, "saved");
             Ok(())
         }

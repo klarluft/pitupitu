@@ -2,7 +2,8 @@
 //! `default` and `settings`, over `GET`/`PATCH /v1/settings` with this
 //! box's key. The preferences are what the person tells pitupitu about
 //! themselves and their machines; the voice foreman reads them in every
-//! conversation. `note` and `driver` are this box's own.
+//! conversation. `note`, `driver` and on/off (`enabled`) are this box's
+//! own; `updates` is what the foreman brings up between turns unasked.
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
@@ -11,6 +12,7 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 pub const DRIVERS: &[&str] = &["auto", "herdr", "terminal"];
+pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
 
 fn endpoint(cfg: &Config) -> Result<(String, String)> {
     let Some(key) = cfg.api_key.clone() else {
@@ -84,6 +86,14 @@ pub fn print(settings: &Value, as_json: bool) {
             .unwrap_or("none (pitupitu asks)")
     );
     println!(
+        "updates: {}",
+        match settings["updates"].as_str().unwrap_or("mine") {
+            "all" => "all (your own sessions too)",
+            "quiet" => "quiet (nothing unless asked)",
+            _ => "mine (only what pitupitu started)",
+        }
+    );
+    println!(
         "voice: {}; patience: {} ms",
         settings["voice"].as_str().unwrap_or("default"),
         settings["patience_ms"]
@@ -92,12 +102,17 @@ pub fn print(settings: &Value, as_json: bool) {
     for b in settings["boxes"].as_array().into_iter().flatten() {
         let name = b["name"].as_str().unwrap_or("?");
         let mut line = format!(
-            "  {name}{}: {}, driver {}",
+            "  {name}{}: {}{}, driver {}",
             if name == me { " (this box)" } else { "" },
             if b["online"] == true {
                 "online"
             } else {
                 "offline"
+            },
+            if b["enabled"] == false {
+                ", switched off"
+            } else {
+                ""
             },
             b["driver"].as_str().unwrap_or("auto")
         );
