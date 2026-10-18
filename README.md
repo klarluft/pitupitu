@@ -60,6 +60,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu prefs` | show your preferences; `prefs edit`, `prefs set <file>` (`-` for stdin), `prefs clear` |
 | `pitupitu box note <text>` | one line about this box ("client work, Acme"); `--clear` |
 | `pitupitu box driver auto\|herdr\|terminal` | what runs agent sessions here (`auto`: herdr when it runs) |
+| `pitupitu box rename <name>` | what you call this machine when you talk; also on the talk page (tap the machine) |
 | `pitupitu box on` / `box off` | off: stays linked, but pitupitu starts nothing here and ignores its sessions until on again |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
 | `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |

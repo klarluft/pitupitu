@@ -187,6 +187,11 @@ enum BoxCmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
     },
+    /// Rename this box: what you call it when you talk ("on the mac, …").
+    Rename {
+        #[arg(required = true)]
+        name: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -294,6 +299,19 @@ async fn main() -> Result<()> {
         }
         Cmd::Box { action } => {
             let cfg = Config::load(&path)?;
+            if let BoxCmd::Rename { name } = &action {
+                let s = settings::patch(&cfg, json!({"name": name.join(" ")})).await?;
+                // The name `setup --relink` would ask for, kept in step.
+                if let Some(now) = s["box"].as_str() {
+                    config::set(&path, &[("cloud", "box", now)])?;
+                }
+                done(
+                    &s,
+                    as_json,
+                    "renamed; the link comes back under the new name in a moment",
+                );
+                return Ok(());
+            }
             let change = match action {
                 BoxCmd::Note { text, clear } => {
                     let note = if clear { String::new() } else { text.join(" ") };
@@ -303,6 +321,7 @@ async fn main() -> Result<()> {
                 BoxCmd::On => json!({"enabled": true}),
                 BoxCmd::Off => json!({"enabled": false}),
                 BoxCmd::Agent { name } => json!({"agent": settings::agent_or_null(&name)}),
+                BoxCmd::Rename { .. } => unreachable!("handled above"),
             };
             let s = settings::patch(&cfg, change).await?;
             done(&s, as_json, "saved");
