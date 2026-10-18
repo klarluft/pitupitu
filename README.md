@@ -72,7 +72,7 @@ Environment: `PITUPITU_CONFIG` (config file), `PITUPITU_CLOUD_URL`, `PITUPITU_CL
 
 ## Updating
 
-pitupitu never updates itself. Run the install command again, or `brew upgrade pitupitu`, then `pitupitu setup` (or restart the service). The cloud accepts the current and the previous box protocol; an older box is told to update.
+pitupitu never updates itself. Run the install command again, then `pitupitu setup` (or restart the service). The cloud accepts the current and the previous box protocol; an older box is told to update.
 
 ## Contributing
 
