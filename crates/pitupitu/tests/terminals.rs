@@ -111,9 +111,11 @@ async fn an_agent_in_the_box_s_own_terminals() {
     )
     .await["ok"]
         .clone();
-    assert_eq!(created["workspace_id"], "tw1");
+    // Numbered from the clock, so a holder started again never reuses one.
+    let ws_id = created["workspace_id"].as_str().unwrap().to_string();
+    assert!(ws_id.starts_with("tw") && ws_id.len() > 4, "{ws_id}");
     let pane = created["root_pane"].as_str().unwrap().to_string();
-    assert_eq!(pane, "tw1:p1");
+    assert_eq!(pane, format!("{ws_id}:p1"));
     let ws = call(&socket, json!({"op": "list_workspaces"})).await;
     assert_eq!(ws["ok"][0]["label"], "project");
 
@@ -135,7 +137,7 @@ async fn an_agent_in_the_box_s_own_terminals() {
     let info = &started["ok"];
     assert_eq!(info["agent_status"], "idle", "{started}");
     assert_eq!(info["interactive_ready"], true);
-    assert_eq!(info["workspace_id"], "tw1");
+    assert_eq!(info["workspace_id"], ws_id.as_str());
     let screen = call(
         &socket,
         json!({"op": "read", "agent": "pitu-test", "lines": 40}),
@@ -217,7 +219,7 @@ async fn an_agent_in_the_box_s_own_terminals() {
     // Closing the last workspace ends the holder.
     call(
         &socket,
-        json!({"op": "close_workspace", "workspace": "tw1"}),
+        json!({"op": "close_workspace", "workspace": ws_id}),
     )
     .await;
     let end = Instant::now() + Duration::from_secs(5);

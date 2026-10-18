@@ -57,8 +57,13 @@ pub const KINDS: &[&str] = &["claude", "codex"];
 struct Title(Option<String>);
 
 impl vt100::Callbacks for Title {
+    /// Without the spinner or status mark the agents put in front
+    /// (Claude Code's `✳ `, Codex's `⠋ | `): the title is spoken.
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
-        let t = String::from_utf8_lossy(title).trim().to_string();
+        let t = String::from_utf8_lossy(title)
+            .trim_start_matches(|c: char| !c.is_alphanumeric())
+            .trim()
+            .to_string();
         self.0 = (!t.is_empty()).then_some(t);
     }
 }
@@ -98,7 +103,15 @@ struct Agent {
     trust_answered: bool,
     last_screen: String,
     stable_since: Instant,
+    /// The last completed turn, and whether the agent worked since: Codex
+    /// calls its `notify` twice for one turn.
+    last_done: Option<Instant>,
+    worked_since_done: bool,
 }
+
+/// A second "turn done" this soon after the first, with no work between,
+/// is the same turn.
+const SAME_TURN: Duration = Duration::from_secs(5);
 
 impl Agent {
     fn set(&mut self, status: Status) {
@@ -106,6 +119,23 @@ impl Agent {
             self.status = status;
             self.seq += 1;
         }
+        if status == Status::Working {
+            self.worked_since_done = true;
+        }
+    }
+
+    /// A turn completed, unless this is a repeat of the last one.
+    fn done(&mut self) {
+        let repeat =
+            !self.worked_since_done && self.last_done.is_some_and(|t| t.elapsed() < SAME_TURN);
+        if repeat {
+            return;
+        }
+        self.ready = true;
+        self.set(Status::Done);
+        self.completion += 1;
+        self.last_done = Some(Instant::now());
+        self.worked_since_done = false;
     }
 }
 
@@ -175,7 +205,10 @@ pub async fn run(socket: PathBuf) -> Result<()> {
         .with_context(|| format!("listening on {}", socket.display()))?;
     set_mode(&socket, 0o600);
     let holder = Arc::new(Holder {
-        state: Mutex::new(State::default()),
+        state: Mutex::new(State {
+            next_ws: first_workspace_number(),
+            ..State::default()
+        }),
         exe: std::env::current_exe().context("finding this binary")?,
         socket: socket.clone(),
         born: Instant::now(),
@@ -199,6 +232,18 @@ pub async fn run(socket: PathBuf) -> Result<()> {
             }
         }
     }
+}
+
+/// Where this holder's workspace numbers start: from the clock, so a
+/// holder started again never hands out an id an earlier one used. The
+/// cloud keeps tasks by pane id, and a reused one would be taken for the
+/// old task.
+fn first_workspace_number() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (secs % 100_000_000) as u32 * 10
 }
 
 fn set_mode(path: &Path, mode: u32) {
@@ -549,6 +594,8 @@ impl Holder {
                 trust_answered: false,
                 last_screen: String::new(),
                 stable_since: now,
+                last_done: None,
+                worked_since_done: false,
             });
             let typed = format!("{line}\r");
             if let Err(e) = p
@@ -751,11 +798,7 @@ impl Holder {
             "prompt" => a.set(Status::Working),
             "tool" if a.status == Status::Blocked => a.set(Status::Working),
             "notify" if detail == "permission" => a.set(Status::Blocked),
-            "stop" | "done" => {
-                a.ready = true;
-                a.set(Status::Done);
-                a.completion += 1;
-            }
+            "stop" | "done" => a.done(),
             _ => {}
         }
     }
@@ -974,9 +1017,46 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_reported_done_twice_counts_once() {
+        let now = Instant::now();
+        let mut a = Agent {
+            name: "x".into(),
+            kind: "codex".into(),
+            status: Status::Idle,
+            seq: 1,
+            completion: 0,
+            ready: true,
+            started: now,
+            trust_answered: false,
+            last_screen: String::new(),
+            stable_since: now,
+            last_done: None,
+            worked_since_done: false,
+        };
+        a.set(Status::Working);
+        a.done();
+        a.done();
+        assert_eq!((a.status, a.completion), (Status::Done, 1));
+        // Read in between (done -> idle), then the repeat: still one.
+        a.set(Status::Idle);
+        a.done();
+        assert_eq!((a.status, a.completion), (Status::Idle, 1));
+        // A new turn counts.
+        a.set(Status::Working);
+        a.done();
+        assert_eq!((a.status, a.completion), (Status::Done, 2));
+    }
+
+    #[test]
     fn window_titles_are_kept() {
         let mut p = vt100::Parser::new_with_callbacks(5, 40, 0, Title(None));
         p.process(b"\x1b]2;Fix the login bug\x07");
         assert_eq!(p.callbacks().0.as_deref(), Some("Fix the login bug"));
+        p.process("\x1b]2;✳ Pong reply\x07".as_bytes());
+        assert_eq!(p.callbacks().0.as_deref(), Some("Pong reply"));
+        p.process("\x1b]2;⠋ | place\x07".as_bytes());
+        assert_eq!(p.callbacks().0.as_deref(), Some("place"));
+        p.process("\x1b]2;⠋\x07".as_bytes());
+        assert_eq!(p.callbacks().0, None);
     }
 }
