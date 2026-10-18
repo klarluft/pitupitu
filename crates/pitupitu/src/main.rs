@@ -31,7 +31,7 @@ use std::sync::Arc;
 #[command(
     name = "pitupitu",
     version,
-    about = "Links herdr on this machine to pitupitu cloud"
+    about = "Links this machine's coding agents (in herdr, or in its own terminals) to pitupitu cloud"
 )]
 struct Cli {
     /// Config file (default: $PITUPITU_CONFIG or ~/.config/pitupitu/pitupitu.toml).

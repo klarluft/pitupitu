@@ -1,5 +1,6 @@
 //! The box link: one outbound WebSocket to pitupitu cloud (`GET /v1/box`),
-//! over which the cloud calls herdr on this machine. Nothing connects in.
+//! over which the cloud drives the agents on this machine, through herdr
+//! or the terminal host (`router.rs`). Nothing connects in.
 //! The protocol is in `docs/box-link.md`.
 
 use crate::calls::{self, CallError};
@@ -22,7 +23,7 @@ use tracing::{debug, info, warn};
 /// The box link protocol this box speaks.
 pub const PROTOCOL: u32 = 2;
 
-/// How often herdr's agent list and the home folder are looked at.
+/// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
 /// The cloud pings every 20 s; this long without one means a dead socket.
 pub const PING_TIMEOUT: Duration = Duration::from_secs(60);
@@ -120,7 +121,7 @@ impl Link {
         let (agents, herdr_up) = match self.host.list_agents().await {
             Ok(a) => (a, true),
             Err(e) => {
-                warn!("herdr: {e}; is herdr running?");
+                warn!("agent list: {e}");
                 (Vec::new(), false)
             }
         };

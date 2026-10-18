@@ -43,8 +43,10 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "add $dir to your PATH to run pitupitu from a shell" ;;
 esac
-if ! command -v herdr >/dev/null 2>&1; then
-  echo "pitupitu needs herdr: https://herdr.dev"
+if command -v herdr >/dev/null 2>&1; then
+  echo "herdr found: sessions will run there when it is running (pitupitu box driver to change)"
+else
+  echo "herdr not found: pitupitu will run your agents in its own terminals (pitupitu attach shows them)"
 fi
 
 # `-r /dev/tty` is true even without a controlling terminal; opening it
