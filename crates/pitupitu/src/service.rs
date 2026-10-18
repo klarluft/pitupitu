@@ -17,7 +17,32 @@ pub struct Installed {
 }
 
 fn exe() -> Result<PathBuf> {
-    std::env::current_exe().context("finding this binary")
+    let exe = std::env::current_exe().context("finding this binary")?;
+    Ok(match homebrew_opt(&exe) {
+        Some(opt) if opt.exists() => opt,
+        _ => exe,
+    })
+}
+
+/// Homebrew runs us from `<prefix>/Cellar/<formula>/<version>/bin/<name>`,
+/// a folder `brew upgrade` deletes. Its `<prefix>/opt/<formula>` link
+/// follows upgrades, so the service is pointed there instead.
+fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
+    let name = exe.file_name()?;
+    let bin = exe.parent()?;
+    let formula_dir = bin.parent()?.parent()?;
+    let cellar = formula_dir.parent()?;
+    if bin.file_name()? != "bin" || cellar.file_name()? != "Cellar" {
+        return None;
+    }
+    Some(
+        cellar
+            .parent()?
+            .join("opt")
+            .join(formula_dir.file_name()?)
+            .join("bin")
+            .join(name),
+    )
 }
 
 fn env_path() -> String {
@@ -295,5 +320,27 @@ mod tests {
         assert!(plist
             .contains("<string>/opt/homebrew/bin/pitupitu</string>\n    <string>connect</string>"));
         assert!(xml("a<b&c").contains("&lt;") && xml("a<b&c").contains("&amp;"));
+    }
+
+    #[test]
+    fn a_homebrew_binary_is_run_through_its_opt_link() {
+        assert_eq!(
+            homebrew_opt(Path::new(
+                "/opt/homebrew/Cellar/pitupitu/0.3.3/bin/pitupitu"
+            )),
+            Some(PathBuf::from("/opt/homebrew/opt/pitupitu/bin/pitupitu"))
+        );
+        assert_eq!(
+            homebrew_opt(Path::new(
+                "/home/linuxbrew/.linuxbrew/Cellar/pitupitu/0.3.3_1/bin/pitupitu"
+            )),
+            Some(PathBuf::from(
+                "/home/linuxbrew/.linuxbrew/opt/pitupitu/bin/pitupitu"
+            ))
+        );
+        assert_eq!(
+            homebrew_opt(Path::new("/home/me/.local/bin/pitupitu")),
+            None
+        );
     }
 }

@@ -46,9 +46,15 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # The Homebrew formula, filled from the checksums just built;
+      # klarluft/homebrew-tap copies it from the release.
+      - run: src/packaging/homebrew/fill.sh "${GITHUB_REF_NAME#v}" . > pitupitu.rb
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes pitupitu-*.tar.gz*
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes pitupitu-*.tar.gz* pitupitu.rb
