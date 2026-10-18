@@ -7,11 +7,11 @@ This repository is the part that runs on each of your machines: a small agent th
 ## How it works
 
 ```
-phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound WebSocket) ── pitupitu ──▶ herdr ──▶ your agents
+phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound WebSocket) ── pitupitu ──▶ herdr, or its own terminals ──▶ your agents
 ```
 
 - The box agent **dials out** to `wss://api.pitupitu.chat/v1/box`. Nothing connects in: no open port, no VPN, no certificate on your machine.
-- The cloud can ask for a fixed set of herdr operations only: list and open workspaces and tabs, start an agent in a pane, send it a prompt or keys, read its screen, wait for it. There is no shell and no arbitrary command. The full list is in [docs/box-link.md](docs/box-link.md) and in [`calls.rs`](crates/pitupitu/src/calls.rs).
+- The cloud can ask for a fixed set of operations only, served by herdr or by this agent's own terminal host: list and open workspaces and tabs, start an agent in a pane, send it a prompt or keys, read its screen, wait for it. There is no shell and no arbitrary command. The full list is in [docs/box-link.md](docs/box-link.md) and in [`calls.rs`](crates/pitupitu/src/calls.rs).
 - Your agents run as they always do, your own unmodified `claude` and `codex` signed in by you, on your own subscriptions or keys. pitupitu never reads, sees or uses their credentials.
 - From your files, only `skills/*/SKILL.md` in the pitupitu home folder are sent, plus what the box reports about itself: which agent CLIs are installed (with their versions), and the folders your agents worked in recently (only the folder paths and when, read from the agents' own session history; nothing else from those files).
 
@@ -27,7 +27,7 @@ or build from source with a recent stable Rust:
 cargo install --git https://github.com/klarluft/pitupitu pitupitu
 ```
 
-You need [herdr](https://herdr.dev) installed and running.
+You need `claude` and/or `codex` installed and signed in. [herdr](https://herdr.dev) is optional: when it runs, sessions open there (`pitupitu box driver` chooses); without it, pitupitu hosts the terminals itself.
 
 ## Set up
 

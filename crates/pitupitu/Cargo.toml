@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The pitupitu box agent: links herdr on this machine to pitupitu cloud."
+description = "The pitupitu box agent: links this machine's coding agents (in herdr, or in its own terminals) to pitupitu cloud."
 
 [dependencies]
 anyhow.workspace = true

@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **1**.
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **2** (the cloud also accepts 1).
 
 ## Connecting
 
