@@ -34,6 +34,9 @@ const SCROLLBACK: usize = 5000;
 const TICK: Duration = Duration::from_millis(500);
 /// A holder nobody used exits after this long.
 const IDLE_EXIT: Duration = Duration::from_secs(600);
+/// How long a start waits for the pane's shell to be reading before
+/// typing the agent's command anyway.
+const SHELL_WAIT: Duration = Duration::from_secs(10);
 /// What a running Claude Code session sets for the processes it starts.
 /// Configuration (auth, Bedrock, …) is left alone.
 const SESSION_MARKERS: &[&str] = &[
@@ -569,6 +572,7 @@ impl Holder {
             ));
         }
         let line = self.command_line(&kind, &pane, &args);
+        self.wait_for_shell(&pane).await?;
         {
             let mut st = self.state.lock().unwrap();
             if Self::find(&st, &name).is_some() {
@@ -621,9 +625,13 @@ impl Holder {
                     return Err(refused("pane_not_found", format!("{pane} closed")));
                 };
                 let Some(a) = p.agent.as_mut() else {
+                    let screen = p.screen.lock().unwrap().screen().contents();
                     return Err(refused(
                         "agent_not_ready",
-                        format!("{kind} exited right after starting; is it installed?"),
+                        format!(
+                            "{kind} exited right after starting; is it installed?\n{}",
+                            tail(&screen, 20)
+                        ),
                     ));
                 };
                 let screen = p.screen.lock().unwrap().screen().contents();
@@ -679,6 +687,45 @@ impl Holder {
                     ),
                 ));
             }
+        }
+    }
+
+    /// Until the pane's shell is reading what is typed, or `SHELL_WAIT`.
+    /// A fresh PTY is in canonical mode until the shell's line editor
+    /// takes it over, which a login shell with a long rc can take a while
+    /// to do. Typed before then, a line is echoed by the kernel as well as
+    /// by the shell, so it shows twice, and on macOS it is cut at 1024
+    /// bytes (`MAX_INPUT`), Enter included: an agent command with long
+    /// hook paths is then never run. A line editor shows as canonical
+    /// mode off; a shell without one is taken as reading once its prompt
+    /// has been on the screen, unchanged, for a moment.
+    async fn wait_for_shell(&self, pane: &str) -> std::result::Result<(), Refused> {
+        let deadline = Instant::now() + SHELL_WAIT;
+        let mut last = String::new();
+        let mut stable_since = Instant::now();
+        loop {
+            {
+                let st = self.state.lock().unwrap();
+                let Some(p) = st.panes.get(pane) else {
+                    return Err(refused("pane_not_found", format!("no pane {pane}")));
+                };
+                if p.agent.is_some() || line_editor_reading(p.master.as_ref()) {
+                    return Ok(());
+                }
+                let screen = p.screen.lock().unwrap().screen().contents();
+                if screen != last {
+                    last = screen;
+                    stable_since = Instant::now();
+                }
+                if !last.trim().is_empty() && stable_since.elapsed() > Duration::from_millis(500) {
+                    return Ok(());
+                }
+            }
+            if Instant::now() > deadline {
+                info!(pane = %pane, "shell not reading yet; typing anyway");
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
@@ -962,6 +1009,21 @@ impl Holder {
             let _ = p.writer.flush();
         }
     }
+}
+
+/// Whether a line editor (the shell's, or an agent's) has the pane's
+/// terminal: canonical mode is off. The master reports the terminal's
+/// settings on Linux and macOS alike.
+fn line_editor_reading(master: &dyn MasterPty) -> bool {
+    let Some(fd) = master.as_raw_fd() else {
+        return false;
+    };
+    let mut t: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: `fd` is the open PTY master and `t` a termios to fill.
+    if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
+        return false;
+    }
+    t.c_lflag & libc::ICANON == 0
 }
 
 /// The last `lines` lines a pane printed: the scrollback above the screen,
