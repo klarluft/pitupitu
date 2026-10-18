@@ -84,9 +84,14 @@ impl HerdrCli {
             }
             args
         };
-        let recent = self.run_text(&read("recent-unwrapped")).await?;
-        if !blank(&recent) {
-            return Ok(recent);
+        match self.run_text(&read("recent-unwrapped")).await {
+            Ok(recent) if !blank(&recent) => return Ok(recent),
+            Ok(_) => {}
+            // An agent on the alternate screen has its history read by
+            // scrolling, which herdr does only while it is idle; blocked
+            // at a dialog it never is.
+            Err(e) if e.code() == Some("agent_not_idle") => {}
+            Err(e) => return Err(e),
         }
         // Dialogs (Claude Code's question UI, approvals) live on a screen
         // that `recent` does not see; the rendered viewport does.
@@ -387,5 +392,49 @@ mod tests {
         assert!(blank("\x1b[0m  \n\x1b[38;2;1;2;3m \x1b[m"));
         assert!(!blank("\x1b[31mok\x1b[m"));
         assert!(!blank("plain"));
+    }
+
+    /// A stand-in `herdr` that answers `agent read` by source: `recent`
+    /// as given, `visible` with the dialog.
+    #[cfg(unix)]
+    fn fake_herdr(recent: &str) -> (HerdrCli, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pitupitu-herdr-{}-{}",
+            std::process::id(),
+            recent.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("herdr");
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *recent-unwrapped*) {recent} ;;\n  *visible*) printf 'Option one or option two?\\n> 1. Option one\\n  2. Option two\\n' ;;\nesac\n"
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (HerdrCli::with_binary(bin.to_string_lossy()), dir)
+    }
+
+    /// herdr 0.9 refuses `recent` for a blocked agent on the alternate
+    /// screen.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_blocked_agent_on_the_alternate_screen_is_read_from_the_viewport() {
+        let (cli, dir) = fake_herdr(
+            r#"echo '{"error":{"code":"agent_not_idle","message":"cannot read 80 lines while x is blocked"},"id":"cli:agent:read"}' >&2; exit 1"#,
+        );
+        let text = cli.read("x", 80).await.unwrap();
+        assert!(text.contains("2. Option two"), "{text}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn other_read_errors_still_come_back() {
+        let (cli, dir) = fake_herdr(
+            r#"echo '{"error":{"code":"agent_not_found","message":"agent target x not found"},"id":"cli:agent:read"}' >&2; exit 1"#,
+        );
+        let e = cli.read("x", 80).await.unwrap_err();
+        assert_eq!(e.code(), Some("agent_not_found"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
