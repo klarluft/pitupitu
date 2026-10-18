@@ -14,8 +14,8 @@ use std::path::Path;
 pub const DRIVERS: &[&str] = &["auto", "herdr", "terminal"];
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
 /// The agents a default can name; `auto` clears it.
-pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
-pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
+pub const AGENTS: &[&str] = &["claude", "codex", "gemini", "agy", "auto"];
+pub const AGENT_KINDS: &[&str] = &["claude", "codex", "gemini", "agy"];
 
 /// `auto` is no default at all.
 pub fn agent_or_null(name: &str) -> Value {

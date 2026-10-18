@@ -44,7 +44,7 @@ pitupitu setup
 
 1. **Sign in**: it shows a code; approve it on any screen at pitupitu.chat. The box gets its own key, stored in `~/.config/pitupitu/pitupitu.toml` (readable only by you). An account can have many boxes, each named (the hostname by default, `--box` to choose); setting up the same box again replaces its old key.
 2. **Home folder**: `~/pitupitu` by default. Requests that belong to no project run there, and `skills/<name>/SKILL.md` holds routines you name by voice. What pitupitu should know about you ("client work goes on the work laptop", "I use Codex for reviews") is your preferences, kept in your account: `pitupitu prefs edit`, the page, or just tell pitupitu "remember that …". (A `PITUPITU.md` from 0.1 is no longer read; copy anything useful into `pitupitu prefs`.)
-3. **Skill** (offered once): teaches Claude Code and Codex how to configure pitupitu, so you can ask your own agent to do it.
+3. **Skill** (offered once): teaches your agents (Claude Code, Codex, Gemini CLI, Antigravity CLI) how to configure pitupitu, so you can ask your own agent to do it.
 4. **Service**: a user service starts `pitupitu connect` now and at login (systemd on Linux, launchd on macOS). On a Linux machine you log out of, run `loginctl enable-linger $USER` so it keeps running.
 
 Then open [pitupitu.chat/app](https://pitupitu.chat/app).
@@ -67,7 +67,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu agent claude\|codex\|auto` | the agent a session gets when you don't say (`auto`: what the machine has, Claude first); `pitupitu box agent …` for this machine only |
 | `pitupitu model <agent> <model>` | the model that agent runs on when you don't say (`pitupitu model claude opus`); `--clear` for its own default |
 | `pitupitu place add <name> <path>` | a folder on this machine with a name you say ("in acme, run the tests"); `place rm <name>`, `pitupitu places` lists them all |
-| `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
+| `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills`, and under `~/.gemini` where Gemini CLI or Antigravity CLI is used |
 | `pitupitu sessions` | the sessions in this box's own terminals (when herdr is not used) |
 | `pitupitu attach [session]` | show one live here and type into it; `Ctrl-\` detaches, it keeps running |
 | `pitupitu uninstall` | stop and remove the service; config and home folder stay |

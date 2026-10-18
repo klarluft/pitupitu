@@ -17,11 +17,7 @@ pub enum Dialog {
     Login,
 }
 
-const TRUST: &[&str] = &[
-    "trust this folder",
-    "trust the files in this folder",
-    "trust the contents of this directory",
-];
+pub use herdr::trust_keys;
 
 const APPROVAL: &[&str] = &[
     // Claude Code
@@ -35,6 +31,11 @@ const APPROVAL: &[&str] = &[
     "Would you like to make the following edits?",
     "Allow command?",
     "Approve this",
+    // Gemini CLI
+    "Apply this change?",
+    "Allow execution of",
+    "Waiting for user confirmation",
+    "Answer Questions",
 ];
 
 const LOGIN: &[&str] = &[
@@ -43,50 +44,74 @@ const LOGIN: &[&str] = &[
     "Log in with your Anthropic",
     "Please run /login",
     "Invalid API key",
+    // Antigravity CLI; shown for a moment at every start too, so a start
+    // only fails on it once it stays.
+    "You are currently not signed in",
+    // Gemini CLI
+    "How would you like to authenticate",
+    "Waiting for authentication",
 ];
 
-/// The dialog the bottom of `screen` shows, if any.
+/// The key hints Antigravity CLI puts under a dialog, in place of its
+/// prompt box: an approval ("↑/↓ Navigate · tab Amend · …") or a question
+/// ("↑/↓ Navigate · enter Select · esc Skip").
+const DIALOG_HINTS: &[&str] = &["tab amend", "esc skip"];
+
+/// The dialog the bottom of `screen` shows, if any. None while the agent's
+/// own prompt box is at the bottom ("? for shortcuts"): what is above it is
+/// conversation, or a dialog already answered.
 pub fn dialog(screen: &str) -> Option<Dialog> {
     let lines: Vec<&str> = screen.lines().collect();
+    let filled: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(2)
+        .map(|l| l.trim())
+        .collect();
+    if filled
+        .first()
+        .is_some_and(|l| l.starts_with("? for shortcuts"))
+    {
+        return None;
+    }
     let bottom = lines[lines.len().saturating_sub(BOTTOM)..].join("\n");
     let has = |set: &[&str]| set.iter().any(|p| bottom.contains(p));
-    if has(TRUST) {
+    let hints = filled.iter().any(|l| {
+        let l = l.to_lowercase();
+        l.contains("navigate") && DIALOG_HINTS.iter().any(|h| l.contains(h))
+    });
+    if herdr::is_trust_prompt(&bottom) {
         Some(Dialog::Trust)
     } else if has(LOGIN) {
         Some(Dialog::Login)
-    } else if has(APPROVAL) {
+    } else if has(APPROVAL) || hints {
         Some(Dialog::Approval)
     } else {
         None
     }
 }
 
-/// The keys that answer a trust prompt without changing how the agent asks
-/// for permission: Claude Code's "Yes, I trust this folder" (older: "Yes,
-/// proceed"); for Codex, the option that keeps asking ("No, ask me to
-/// approve …"), never the one that switches approvals off. Options are one
-/// per line, numbered or not, the highlighted one marked `❯`, `›` or `>`.
-/// `None` when the screen offers no such option.
-pub fn trust_keys(screen: &str) -> Option<Vec<&'static str>> {
-    let lines: Vec<&str> = screen.lines().collect();
-    let marked = |l: &str| {
-        let t = l.trim_start();
-        t.starts_with('❯') || t.starts_with('›') || t.starts_with('>')
-    };
-    let current = lines.iter().rposition(|l| marked(l))?;
-    let wanted = lines.iter().rposition(|l| {
-        let l = l.to_lowercase();
-        l.contains("ask me")
-            || (l.contains("yes") && (l.contains("trust") || l.contains("proceed")))
-    })?;
-    let mut keys = Vec::new();
-    if wanted > current {
-        keys.extend(std::iter::repeat_n("down", wanted - current));
-    } else {
-        keys.extend(std::iter::repeat_n("up", current - wanted));
-    }
-    keys.push("enter");
-    Some(keys)
+/// Does the bottom of `screen` show the agent at work: the "esc to cancel"
+/// footer Gemini CLI and Antigravity CLI show during a turn, or a line led
+/// by a braille spinner? For the agents whose turns are seen only on the
+/// screen.
+pub fn working(screen: &str) -> bool {
+    screen
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(12)
+        .any(|l| {
+            let t = l.trim_start();
+            l.to_lowercase().contains("esc to cancel")
+                || t.chars()
+                    .next()
+                    .is_some_and(|c| ('\u{2801}'..='\u{28FF}').contains(&c))
+                    && t.chars()
+                        .skip_while(|c| !c.is_whitespace())
+                        .any(|c| !c.is_whitespace())
+        })
 }
 
 /// A key name, as the cloud's `send_keys` and herdr use them, as bytes.
@@ -141,19 +166,23 @@ mod tests {
         assert_eq!(dialog("> \n? for shortcuts"), None);
     }
 
+    /// Antigravity CLI 1.4: the trust dialog stays above the prompt box
+    /// once answered; dialogs replace the box and end with key hints.
     #[test]
-    fn trust_is_answered_without_switching_approvals_off() {
-        let claude =
-            " Do you trust the files in this folder?\n ❯ 1. Yes, proceed\n   2. No, exit\n";
-        assert_eq!(trust_keys(claude), Some(vec!["enter"]));
-        let claude_no =
-            " Do you trust the files in this folder?\n   1. Yes, proceed\n ❯ 2. No, exit\n";
-        assert_eq!(trust_keys(claude_no), Some(vec!["up", "enter"]));
-        let claude_now = " Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n";
-        assert_eq!(trust_keys(claude_now), Some(vec!["down", "enter"]));
-        let codex = "Do you trust the contents of this directory?\n› 1. Yes, allow Codex to work in this folder without asking for approval\n  2. No, ask me to approve edits and commands\n";
-        assert_eq!(trust_keys(codex), Some(vec!["down", "enter"]));
-        assert_eq!(trust_keys("nothing to choose"), None);
+    fn antigravity_screens() {
+        let trust = "Do you trust the contents of this project?\n\n> Yes, I trust this folder\n  No, exit\n\n  ↑/↓ Navigate · enter Confirm\n";
+        assert_eq!(dialog(trust), Some(Dialog::Trust));
+        let idle = format!(
+            "{trust}\n      ▄▀▀▄        Antigravity CLI 1.4.2\n───────\n>\n───────\n? for shortcuts                 Gemini 3.8 Flash · high\n"
+        );
+        assert_eq!(dialog(&idle), None);
+        assert!(!working(&idle));
+        let approval = "  run_command: npm test\n\n> Allow once\n  Always allow\n  Deny\n\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\n───────── esc to cancel\n";
+        assert_eq!(dialog(approval), Some(Dialog::Approval));
+        let busy = "> fix the build\n\n⠹ Thinking about the failing test\n───────\n>\n───────── esc to cancel\n";
+        assert_eq!(dialog(busy), None);
+        assert!(working(busy));
+        assert!(working("⠋ Reading files\n───\n>\n───\n"));
     }
 
     #[test]

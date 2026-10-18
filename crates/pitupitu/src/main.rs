@@ -126,7 +126,7 @@ enum Cmd {
     },
     /// All of the account's settings and boxes.
     Settings,
-    /// The pitupitu skill for Claude Code and Codex.
+    /// The pitupitu skill for your agents (Claude Code, Codex, Gemini CLI, Antigravity CLI).
     Skill {
         #[command(subcommand)]
         action: SkillCmd,
@@ -211,7 +211,7 @@ enum PlaceCmd {
 enum SkillCmd {
     /// Print SKILL.md (same as `pitupitu --skill`).
     Print,
-    /// Install it for Claude Code (~/.claude/skills) and Codex (~/.codex/skills).
+    /// Install it for Claude Code (~/.claude/skills), Codex (~/.codex/skills) and, where they are used, Gemini CLI and Antigravity CLI (~/.gemini).
     Install,
 }
 
@@ -600,7 +600,7 @@ async fn setup(
     if !skill_file.exists() {
         if std::io::stdin().is_terminal() {
             let yes = ask(
-                "teach Claude Code and Codex how to configure pitupitu (installs a skill)? y/n",
+                "teach your agents (Claude Code, Codex, …) how to configure pitupitu (installs a skill)? y/n",
                 "y",
             );
             if yes.to_lowercase().starts_with('y') {
@@ -609,9 +609,7 @@ async fn setup(
                 }
             }
         } else {
-            eprintln!(
-                "  `pitupitu skill install` teaches Claude Code and Codex to configure pitupitu"
-            );
+            eprintln!("  `pitupitu skill install` teaches your agents to configure pitupitu");
         }
     }
 

@@ -121,10 +121,10 @@ async fn an_agent_in_the_box_s_own_terminals() {
     let ws = call(&socket, json!({"op": "list_workspaces"})).await;
     assert_eq!(ws["ok"][0]["label"], "project");
 
-    // Only claude and codex.
+    // Only the kinds it knows.
     let refused = call(
         &socket,
-        json!({"op": "start_agent", "name": "x", "kind": "gemini", "pane": pane}),
+        json!({"op": "start_agent", "name": "x", "kind": "opencode", "pane": pane}),
     )
     .await;
     assert_eq!(refused["err"]["code"], "unsupported_agent_kind");
@@ -245,4 +245,108 @@ async fn an_agent_in_the_box_s_own_terminals() {
         assert!(Instant::now() < end, "holder did not exit");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+const FAKE_AGY: &str = r#"#!/bin/sh
+# Stand-in for Antigravity CLI: no hooks, its state only on the screen.
+idle() { printf '%s\n>\n%s\n? for shortcuts\n' '───────' '───────'; }
+clear() { i=0; while [ $i -lt 40 ]; do echo; i=$((i+1)); done; }
+printf 'Do you trust the contents of this project?\n\n> Yes, I trust this folder\n  No, exit\n\n  ↑/↓ Navigate · enter Confirm\n'
+IFS= read -r trusted
+echo "fake agy ready (args: $*)"
+idle
+while IFS= read -r line; do
+  clear
+  printf '⠋ Working on it\n%s\n>\n%s esc to cancel\n' '───────' '───────'
+  sleep 2
+  clear
+  echo "answer: $line"
+  idle
+done
+"#;
+
+/// An agent without hooks (Antigravity CLI): its trust prompt answered,
+/// its turn seen working and done on the screen alone.
+#[tokio::test]
+async fn an_agent_seen_only_on_its_screen() {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_pitupitu"));
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let shell = bin.join("testshell");
+    std::fs::write(&shell, "#!/bin/sh\nexec /bin/sh\n").unwrap();
+    let fake = bin.join("agy");
+    std::fs::write(&fake, FAKE_AGY).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for f in [&fake, &shell] {
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let work = dir.path().join("project");
+    std::fs::create_dir_all(&work).unwrap();
+    let socket = dir.path().join("terms.sock");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let _holder = Holder(
+        std::process::Command::new(&exe)
+            .arg("terminals")
+            .env("PITUPITU_TERMS_SOCKET", &socket)
+            .env("PATH", &path)
+            .env("SHELL", &shell)
+            .spawn()
+            .unwrap(),
+    );
+    let end = Instant::now() + Duration::from_secs(5);
+    while UnixStream::connect(&socket).await.is_err() {
+        assert!(Instant::now() < end, "holder did not start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let created = call(
+        &socket,
+        json!({"op": "create_workspace", "cwd": work, "label": "project"}),
+    )
+    .await["ok"]
+        .clone();
+    let pane = created["root_pane"].as_str().unwrap().to_string();
+
+    let started = call(
+        &socket,
+        json!({"op": "start_agent", "name": "pitu-test", "kind": "agy", "pane": pane,
+               "accept_trust_prompt": true,
+               "agent_args": ["--model", "gemini-3.8-flash-medium"],
+               "timeout_ms": 10000}),
+    )
+    .await;
+    assert_eq!(started["ok"]["agent_status"], "idle", "{started}");
+    let screen = call(
+        &socket,
+        json!({"op": "read", "agent": "pitu-test", "lines": 200}),
+    )
+    .await;
+    let screen = screen["ok"].as_str().unwrap();
+    assert!(
+        screen.contains("fake agy ready (args: --model gemini-3.8-flash-medium)"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("dangerously"),
+        "no permission flags: {screen}"
+    );
+
+    let before = call(
+        &socket,
+        json!({"op": "prompt", "agent": "pitu-test", "text": "hello there"}),
+    )
+    .await;
+    let seq = before["ok"]["state_change_seq"].as_u64().unwrap();
+    let done = until(&socket, "done").await;
+    assert!(done["state_change_seq"].as_u64().unwrap() > seq);
+    assert_eq!(done["completion_seq"], 1);
+    let read = call(
+        &socket,
+        json!({"op": "read", "agent": "pitu-test", "lines": 10}),
+    )
+    .await;
+    assert!(read["ok"].as_str().unwrap().contains("answer: hello there"));
+    assert_eq!(agent(&socket).await["agent_status"], "idle");
 }

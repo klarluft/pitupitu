@@ -2,9 +2,11 @@
 //! CLIs are on `PATH`, and the project folders agents worked in recently.
 //!
 //! Recent folders come from the agents' own session history: Claude Code's
-//! `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`.
-//! Only the working directory of each session and when it was last written
-//! are read and sent; nothing else from those files leaves the box. Their
+//! `~/.claude/projects/*/*.jsonl`, Codex's `~/.codex/sessions/**/*.jsonl`
+//! and Gemini CLI's `~/.gemini/projects.json` with the chats it keeps per
+//! project. Only the working directory of each session and when it was
+//! last written are read and sent; nothing else from those files leaves
+//! the box. Their
 //! credentials are never read: whether an agent is logged in is not
 //! checked at all.
 
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// Agent CLIs looked for on `PATH`.
-const KINDS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+const KINDS: &[&str] = &["claude", "codex", "gemini", "agy", "opencode"];
 /// Recent folders sent, newest first.
 const RECENT_MAX: usize = 30;
 /// Session files looked at, newest first.
@@ -89,12 +91,28 @@ pub fn recent(home: &Path) -> Vec<Recent> {
     });
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     files.truncate(FILES_MAX);
+    // Gemini CLI: its chats do not record the folder; its project list
+    // names each project's folder under ~/.gemini/tmp.
+    let mut sessions: Vec<(SystemTime, Session, &str)> = files
+        .into_iter()
+        .map(|(t, f, agent)| (t, Session::File(f), agent))
+        .collect();
+    for (t, cwd) in gemini_projects(home) {
+        sessions.push((t, Session::Folder(cwd), "gemini"));
+    }
+    sessions.sort_by_key(|f| std::cmp::Reverse(f.0));
 
     let mut seen: HashMap<PathBuf, ()> = HashMap::new();
     let mut out = Vec::new();
-    for (modified, file, agent) in files {
-        let Some(cwd) = session_cwd(&file) else {
-            continue;
+    for (modified, session, agent) in sessions {
+        let cwd = match session {
+            Session::Folder(cwd) => cwd,
+            Session::File(file) => {
+                let Some(cwd) = session_cwd(&file) else {
+                    continue;
+                };
+                cwd
+            }
         };
         if seen.insert(cwd.clone(), ()).is_some() || !cwd.is_dir() {
             continue;
@@ -106,6 +124,49 @@ pub fn recent(home: &Path) -> Vec<Recent> {
         });
         if out.len() == RECENT_MAX {
             break;
+        }
+    }
+    out
+}
+
+enum Session {
+    /// A session file that records its working directory.
+    File(PathBuf),
+    /// A project folder, known some other way.
+    Folder(PathBuf),
+}
+
+/// Gemini CLI's projects (`~/.gemini/projects.json`: folder → name), each
+/// with when its newest chat in `~/.gemini/tmp/<name>/chats` was written.
+fn gemini_projects(home: &Path) -> Vec<(SystemTime, PathBuf)> {
+    let Ok(text) = std::fs::read_to_string(home.join(".gemini/projects.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (folder, name) in v["projects"].as_object().into_iter().flatten() {
+        let Some(name) = name.as_str() else {
+            continue;
+        };
+        if !folder.starts_with('/') || name.contains('/') || name.starts_with('.') {
+            continue;
+        }
+        let chats = home.join(".gemini/tmp").join(name).join("chats");
+        let newest = std::fs::read_dir(chats)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|f| {
+                f.path()
+                    .extension()
+                    .is_some_and(|x| x == "jsonl" || x == "json")
+            })
+            .filter_map(|f| f.metadata().and_then(|m| m.modified()).ok())
+            .max();
+        if let Some(t) = newest {
+            out.push((t, PathBuf::from(folder)));
         }
     }
     out
@@ -199,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_folders_come_from_both_agents_histories() {
+    fn recent_folders_come_from_the_agents_histories() {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
         let app = h.join("code/app");
@@ -228,12 +289,32 @@ mod tests {
         .unwrap();
         // A session in a folder that is gone is left out.
         std::fs::write(claude.join("s2.jsonl"), "{\"cwd\":\"/no/such/folder\"}\n").unwrap();
+        // Gemini CLI: the project list, and a chat in the project's folder.
+        let web = h.join("code/web");
+        std::fs::create_dir_all(&web).unwrap();
+        let chats = h.join(".gemini/tmp/web/chats");
+        std::fs::create_dir_all(&chats).unwrap();
+        std::fs::write(
+            chats.join("session-2026-10-18T10-00-abcd1234.jsonl"),
+            "{\"sessionId\":\"abcd1234\"}\n{\"type\":\"user\",\"content\":\"secret\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            h.join(".gemini/projects.json"),
+            format!(
+                "{{\"projects\":{{\"{}\":\"web\",\"/no/such/folder\":\"gone\",\"{}\":\"../x\"}}}}",
+                web.display(),
+                app.display()
+            ),
+        )
+        .unwrap();
 
         let r = recent(h);
         let paths: Vec<&PathBuf> = r.iter().map(|x| &x.path).collect();
-        assert_eq!(r.len(), 2, "{r:?}");
-        assert!(paths.contains(&&app) && paths.contains(&&api));
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert!(paths.contains(&&app) && paths.contains(&&api) && paths.contains(&&web));
         assert_eq!(r.iter().find(|x| x.path == api).unwrap().agent, "codex");
+        assert_eq!(r.iter().find(|x| x.path == web).unwrap().agent, "gemini");
         // Only the folder, the agent and the time: no prompt text.
         let sent = serde_json::to_string(&r).unwrap();
         assert!(!sent.contains("secret"));

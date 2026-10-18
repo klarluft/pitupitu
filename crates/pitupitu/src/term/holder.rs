@@ -52,22 +52,35 @@ const SESSION_MARKERS: &[&str] = &[
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_CODE_SESSION_ATTENDED",
     "CLAUDE_CODE_SESSION_ID",
+    // Gemini CLI, for its shell commands, and for the process it relaunches
+    // itself as.
+    "GEMINI_CLI",
+    "GEMINI_CLI_NO_RELAUNCH",
 ];
-/// The agent kinds the terminal host starts.
-pub const KINDS: &[&str] = &["claude", "codex"];
+/// The agent kinds the terminal host starts: Claude Code, Codex, Gemini
+/// CLI and Antigravity CLI.
+pub const KINDS: &[&str] = &["claude", "codex", "gemini", "agy"];
+/// The kinds that report their turns through hooks; the others' turns are
+/// seen on their screen ([`detect::working`]).
+const HOOKED: &[&str] = &["claude", "codex"];
 
 /// Keeps the window title the agent sets (Claude Code's session summary).
 struct Title(Option<String>);
 
 impl vt100::Callbacks for Title {
     /// Without the spinner or status mark the agents put in front
-    /// (Claude Code's `✳ `, Codex's `⠋ | `): the title is spoken.
+    /// (Claude Code's `✳ `, Codex's `⠋ | `): the title is spoken. Gemini
+    /// CLI's title is its state and folder ("◇  Ready (app)"), not a
+    /// session summary, so it is not kept.
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         let t = String::from_utf8_lossy(title)
             .trim_start_matches(|c: char| !c.is_alphanumeric())
             .trim()
             .to_string();
-        self.0 = (!t.is_empty()).then_some(t);
+        let status = ["Ready (", "Working… (", "Action Required (", "Gemini CLI ("]
+            .iter()
+            .any(|s| t.starts_with(s));
+        self.0 = (!t.is_empty() && !status).then_some(t);
     }
 }
 
@@ -110,6 +123,10 @@ struct Agent {
     /// calls its `notify` twice for one turn.
     last_done: Option<Instant>,
     worked_since_done: bool,
+    /// For agents without hooks: when the last prompt went in, and whether
+    /// the screen has shown the turn at work since.
+    prompted: Option<Instant>,
+    seen_working: bool,
 }
 
 /// A second "turn done" this soon after the first, with no work between,
@@ -568,7 +585,10 @@ impl Holder {
         if !KINDS.contains(&kind.as_str()) {
             return Err(refused(
                 "unsupported_agent_kind",
-                format!("this box's own terminals run claude and codex, not {kind}"),
+                format!(
+                    "this box's own terminals run {}, not {kind}",
+                    KINDS.join(", ")
+                ),
             ));
         }
         let line = self.command_line(&kind, &pane, &args);
@@ -601,6 +621,8 @@ impl Holder {
                 stable_since: now,
                 last_done: None,
                 worked_since_done: false,
+                prompted: None,
+                seen_working: false,
             });
             let typed = format!("{line}\r");
             if let Err(e) = p
@@ -795,6 +817,8 @@ impl Holder {
         self.with_agent(target, |p, info| {
             if let Some(a) = p.agent.as_mut() {
                 a.set(Status::Working);
+                a.prompted = Some(Instant::now());
+                a.seen_working = false;
             }
             Ok(info)
         })?;
@@ -884,12 +908,15 @@ impl Holder {
                 None if a.status == Status::Blocked => a.set(Status::Working),
                 None => {}
             }
-            // Agents without a start hook (Codex): ready once the screen
-            // has settled with no dialog on it.
             if screen != a.last_screen {
                 a.last_screen = screen;
                 a.stable_since = Instant::now();
             }
+            if !HOOKED.contains(&a.kind.as_str()) && a.ready {
+                Self::screen_turn(a);
+            }
+            // Agents without a start hook (all but Claude Code): ready once
+            // the screen has settled with no dialog on it.
             let settle = if a.kind == "claude" { 8 } else { 2 };
             if !a.ready
                 && a.status != Status::Blocked
@@ -913,6 +940,34 @@ impl Holder {
             st.panes.is_empty()
         } else {
             self.born.elapsed() > IDLE_EXIT
+        }
+    }
+
+    /// A turn of an agent without hooks, from its screen: working while it
+    /// shows so (a turn the person typed in themselves too), done once it
+    /// stops and the screen settles. A prompt the screen never showed at
+    /// work counts as done after a while, so a quick answer is not missed.
+    fn screen_turn(a: &mut Agent) {
+        let busy = detect::working(&a.last_screen);
+        match a.status {
+            Status::Blocked => {}
+            Status::Working if busy => a.seen_working = true,
+            Status::Working => {
+                let settled = a.stable_since.elapsed() > Duration::from_millis(1500);
+                let quick = a
+                    .prompted
+                    .is_some_and(|t| t.elapsed() > Duration::from_secs(10));
+                if settled && (a.seen_working || quick) {
+                    a.seen_working = false;
+                    a.prompted = None;
+                    a.done();
+                }
+            }
+            _ if busy => {
+                a.set(Status::Working);
+                a.seen_working = true;
+            }
+            _ => {}
         }
     }
 
@@ -1237,6 +1292,8 @@ mod tests {
             stable_since: now,
             last_done: None,
             worked_since_done: false,
+            prompted: None,
+            seen_working: false,
         };
         a.set(Status::Working);
         a.done();

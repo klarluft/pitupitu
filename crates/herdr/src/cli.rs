@@ -130,21 +130,22 @@ impl HerdrCli {
         ))
     }
 
-    /// Claude Code's first-run dialog in a directory it has not seen. The
-    /// highlighted row carries `❯`; "No, exit" is the default.
+    /// The first-run dialog in a directory the agent has not seen,
+    /// answered with the option that trusts it and keeps asking for
+    /// approvals ([`crate::trust_keys`]). Only the bottom of the screen
+    /// counts, so the dialog's leftovers above a prompt do not.
     async fn answer_trust_prompt(&self, agent: &str) -> Result<bool> {
         let screen = self.read(agent, 40).await?;
-        if !screen.contains("trust this folder") {
+        let lines: Vec<&str> = screen.lines().collect();
+        let bottom = lines[lines.len().saturating_sub(16)..].join("\n");
+        if !crate::is_trust_prompt(&bottom) {
             return Ok(false);
         }
-        let yes_highlighted = screen.lines().any(|l| l.contains('❯') && l.contains("Yes"));
-        let keys: &[&str] = if yes_highlighted {
-            &["enter"]
-        } else {
-            &["down", "enter"]
+        let Some(keys) = crate::trust_keys(&bottom) else {
+            return Ok(false);
         };
         debug!(agent, ?keys, "answering trust prompt");
-        self.send_keys(agent, keys).await?;
+        self.send_keys(agent, &keys).await?;
         Ok(true)
     }
 }

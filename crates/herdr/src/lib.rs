@@ -7,7 +7,7 @@
 //! Lessons encoded here:
 //! - `workspace create` / `tab create` return a fresh shell pane; that is
 //!   where an agent gets started. pitupitu only ever closes what it created.
-//! - `agent start` in a directory Claude Code has not seen can return
+//! - `agent start` in a directory the agent has not seen can return
 //!   `agent_not_ready` because of its "trust this folder?" dialog;
 //!   [`HerdrCli::start_agent`] can answer it.
 //! - `agent prompt` returns before the agent is observed working, so a wait
@@ -15,9 +15,11 @@
 //!   `state_change_seq` advancing, not on status alone.
 
 mod cli;
+mod trust;
 mod types;
 
 pub use cli::HerdrCli;
+pub use trust::{is_trust_prompt, trust_keys};
 pub use types::*;
 
 use async_trait::async_trait;
