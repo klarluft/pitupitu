@@ -13,6 +13,7 @@ Refusals and endings are WebSocket close codes after the upgrade:
 | 4001 | `invalid_key` | logs "run `pitupitu setup --relink`", keeps retrying with backoff |
 | 4006 | `replaced` | another box connected with the same key: stops (exit 0) instead of fighting it |
 | 4007 | `protocol` | this box is too old; logs how to update, keeps retrying with backoff |
+| 4008 | `renamed` | the box was renamed (on the page or with `pitupitu box rename`); it reconnects as after any close and is linked under the new name |
 
 Anything else (a deploy, a network drop) is followed by a reconnect: backoff from 1 s doubling to 30 s, with up to 25 % jitter, forever; a link that stayed up 30 s starts the backoff over.
 

@@ -24,6 +24,7 @@ Every command takes `--json` and never prompts when there is no terminal.
 - `pitupitu prefs set <file>` (or `-` for stdin), `pitupitu prefs clear`. `pitupitu prefs edit` opens an editor (a person at a terminal only).
 - `pitupitu box note "<one line>"`: describe this machine ("client work, Acme"). `pitupitu box note --clear`.
 - `pitupitu box driver auto|herdr|terminal`: what runs agent sessions here. `auto` (default) uses herdr when it runs.
+- `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.
 - `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): only what it started; `all`: the person's own sessions too; `quiet`: nothing unless asked.
