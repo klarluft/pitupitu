@@ -144,6 +144,9 @@ struct Wait {
 struct Read {
     agent: String,
     lines: u32,
+    /// Colours as SGR codes, for a page showing the screen.
+    #[serde(default)]
+    color: bool,
 }
 
 #[derive(Deserialize)]
@@ -217,7 +220,12 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         }
         "read" => {
             let a: Read = args(call, a)?;
-            ok(host.read(&a.agent, a.lines.min(MAX_LINES)).await?)
+            let lines = a.lines.min(MAX_LINES);
+            if a.color {
+                ok(host.read_colored(&a.agent, lines).await?)
+            } else {
+                ok(host.read(&a.agent, lines).await?)
+            }
         }
         "send_keys" => {
             let a: SendKeys = args(call, a)?;

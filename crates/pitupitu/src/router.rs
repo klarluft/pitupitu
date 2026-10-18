@@ -174,6 +174,10 @@ impl AgentHost for Router {
         self.by_agent(agent).await.read(agent, lines).await
     }
 
+    async fn read_colored(&self, agent: &str, lines: u32) -> Result<String> {
+        self.by_agent(agent).await.read_colored(agent, lines).await
+    }
+
     async fn send_keys(&self, agent: &str, keys: &[&str]) -> Result<()> {
         self.by_agent(agent).await.send_keys(agent, keys).await
     }

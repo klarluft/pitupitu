@@ -212,6 +212,11 @@ impl AgentHost for TermHost {
             .await
     }
 
+    async fn read_colored(&self, agent: &str, lines: u32) -> Result<String> {
+        self.call(json!({"op": "read", "agent": agent, "lines": lines, "color": true}))
+            .await
+    }
+
     async fn send_keys(&self, agent: &str, keys: &[&str]) -> Result<()> {
         self.call::<Value>(json!({"op": "send_keys", "agent": agent, "keys": keys}))
             .await

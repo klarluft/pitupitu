@@ -116,5 +116,12 @@ pub trait AgentHost: Send + Sync {
     /// Recent unwrapped transcript of the agent's pane.
     async fn read(&self, agent: &str, lines: u32) -> Result<String>;
 
+    /// The same transcript with its colours and attributes as SGR codes
+    /// (`ESC [ … m`) and no other escapes. Hosts that cannot tell
+    /// colours give the plain text.
+    async fn read_colored(&self, agent: &str, lines: u32) -> Result<String> {
+        self.read(agent, lines).await
+    }
+
     async fn send_keys(&self, agent: &str, keys: &[&str]) -> Result<()>;
 }

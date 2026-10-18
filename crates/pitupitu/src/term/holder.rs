@@ -305,7 +305,8 @@ impl Holder {
             "agent" => self.with_agent(&s("agent"), |_, info| Ok(info)),
             "read" => {
                 let lines = req["lines"].as_u64().unwrap_or(60).min(2000) as usize;
-                self.read(&s("agent"), lines)
+                let color = req["color"].as_bool().unwrap_or(false);
+                self.read(&s("agent"), lines, color)
             }
             "send_keys" => {
                 let keys: Vec<String> = req["keys"]
@@ -753,11 +754,17 @@ impl Holder {
         Ok(before)
     }
 
-    /// The last `lines` lines: scrollback, then the screen. Reading a
-    /// finished turn counts as looking at it.
-    fn read(&self, target: &str, lines: usize) -> Reply {
+    /// The last `lines` lines: scrollback, then the screen, with colours
+    /// as SGR codes when asked. Reading a finished turn counts as looking
+    /// at it.
+    fn read(&self, target: &str, lines: usize, color: bool) -> Reply {
         self.with_agent(target, |p, _| {
-            let text = transcript(&mut p.screen.lock().unwrap(), lines);
+            let view = if color {
+                colored
+            } else {
+                vt100::Screen::contents
+            };
+            let text = transcript(&mut p.screen.lock().unwrap(), lines, view);
             if let Some(a) = p.agent.as_mut() {
                 if a.status == Status::Done {
                     a.set(Status::Idle);
@@ -958,17 +965,17 @@ impl Holder {
 }
 
 /// The last `lines` lines a pane printed: the scrollback above the screen,
-/// then the screen, trailing blank lines dropped.
-fn transcript(parser: &mut vt100::Parser<Title>, lines: usize) -> String {
+/// then the screen, trailing blank lines dropped. `view` renders what is
+/// in view: `Screen::contents` for text, `colored` for text with colours.
+fn transcript(
+    parser: &mut vt100::Parser<Title>,
+    lines: usize,
+    view: fn(&vt100::Screen) -> String,
+) -> String {
     let rows = parser.screen().size().0 as usize;
     parser.screen_mut().set_scrollback(0);
-    let mut screen: Vec<String> = parser
-        .screen()
-        .contents()
-        .lines()
-        .map(str::to_string)
-        .collect();
-    while screen.last().is_some_and(|l| l.trim().is_empty()) {
+    let mut screen: Vec<String> = view(parser.screen()).lines().map(str::to_string).collect();
+    while screen.last().is_some_and(|l| plain(l).trim().is_empty()) {
         screen.pop();
     }
     // How much scrollback there is: ask for all of it and see what stuck.
@@ -979,15 +986,112 @@ fn transcript(parser: &mut vt100::Parser<Title>, lines: usize) -> String {
     // Views of `rows` lines each, from the oldest wanted down to the screen.
     while want_above > 0 {
         parser.screen_mut().set_scrollback(want_above);
-        let view = parser.screen().contents();
+        let shown = view(parser.screen());
         let take = want_above.min(rows);
-        out.extend(view.lines().take(take).map(str::to_string));
+        out.extend(shown.lines().take(take).map(str::to_string));
         want_above -= take;
     }
     parser.screen_mut().set_scrollback(0);
     out.extend(screen);
     let skip = out.len().saturating_sub(lines);
     out[skip..].join("\n")
+}
+
+/// What is in view, as `Screen::contents` lays it out (wrapped rows
+/// joined, trailing blanks dropped), with each cell's colours and
+/// attributes as SGR codes and nothing else: no cursor moves. Blank cells
+/// with a background are kept as spaces. Every line ends reset, so each
+/// can be read on its own.
+fn colored(screen: &vt100::Screen) -> String {
+    let (rows, cols) = screen.size();
+    let mut out = String::new();
+    let mut wrapping = false;
+    for row in 0..rows {
+        let cells: Vec<&vt100::Cell> = (0..cols).filter_map(|c| screen.cell(row, c)).collect();
+        let end = cells
+            .iter()
+            .rposition(|c| c.has_contents() || shaded(c))
+            .map_or(0, |i| i + 1);
+        let mut line = String::new();
+        let mut was = String::new();
+        for cell in &cells[..end] {
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let sgr = sgr(cell);
+            if sgr != was {
+                line.push_str(&format!("\x1b[{sgr}m"));
+                was = sgr;
+            }
+            line.push_str(if cell.has_contents() {
+                cell.contents()
+            } else {
+                " "
+            });
+        }
+        if !was.is_empty() {
+            line.push_str("\x1b[m");
+        }
+        if line.is_empty() && wrapping {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        wrapping = screen.row_wrapped(row);
+        if !wrapping {
+            out.push('\n');
+        }
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Whether a blank cell still shows: a background, or reversed.
+fn shaded(cell: &vt100::Cell) -> bool {
+    cell.bgcolor() != vt100::Color::Default || cell.inverse()
+}
+
+/// A cell's SGR parameters, empty for plain text.
+fn sgr(cell: &vt100::Cell) -> String {
+    let mut p: Vec<String> = Vec::new();
+    for (on, code) in [
+        (cell.bold(), "1"),
+        (cell.dim(), "2"),
+        (cell.italic(), "3"),
+        (cell.underline(), "4"),
+        (cell.inverse(), "7"),
+    ] {
+        if on {
+            p.push(code.to_string());
+        }
+    }
+    for (color, base) in [(cell.fgcolor(), 30), (cell.bgcolor(), 40)] {
+        match color {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(i @ 0..=7) => p.push((base + i as u32).to_string()),
+            vt100::Color::Idx(i @ 8..=15) => p.push((base + 60 + i as u32 - 8).to_string()),
+            vt100::Color::Idx(i) => p.push(format!("{};5;{i}", base + 8)),
+            vt100::Color::Rgb(r, g, b) => p.push(format!("{};2;{r};{g};{b}", base + 8)),
+        }
+    }
+    p.join(";")
+}
+
+/// A line without its SGR codes.
+fn plain(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find("\x1b[") {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match rest.find('m') {
+            Some(m) => rest = &rest[m + 1..],
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn tail(screen: &str, n: usize) -> String {
@@ -1005,7 +1109,7 @@ mod tests {
         for i in 1..=12 {
             p.process(format!("line {i}\r\n").as_bytes());
         }
-        let t = transcript(&mut p, 8);
+        let t = transcript(&mut p, 8, vt100::Screen::contents);
         let got: Vec<&str> = t.lines().collect();
         assert_eq!(
             got,
@@ -1013,7 +1117,46 @@ mod tests {
         );
         // The screen is left where it was.
         assert_eq!(p.screen().scrollback(), 0);
-        assert_eq!(transcript(&mut p, 2), "line 11\nline 12");
+        assert_eq!(
+            transcript(&mut p, 2, vt100::Screen::contents),
+            "line 11\nline 12"
+        );
+    }
+
+    #[test]
+    fn colours_come_as_sgr_and_the_text_stays_the_same() {
+        let mut p = vt100::Parser::new_with_callbacks(4, 20, 100, Title(None));
+        p.process(b"\x1b[1;31mred\x1b[m and \x1b[38;2;1;2;3mrgb\x1b[m\r\n");
+        p.process(b"\x1b[44m  \x1b[m\x1b[38;5;200m\xe7\x95\x8c\x1b[m x\r\n");
+        p.process(b"plain\r\n\x1b[7mtwelve chars\x1b[m\x1b[C\x1b[Cend");
+        let text = colored(p.screen());
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "\x1b[1;31mred\x1b[m and \x1b[38;2;1;2;3mrgb\x1b[m",
+                // A shaded blank shows; a wide character is one character.
+                "\x1b[44m  \x1b[38;5;200m界\x1b[m x",
+                "plain",
+                // Cursor moves come out as spaces, never as codes.
+                "\x1b[7mtwelve chars\x1b[m  end",
+            ]
+        );
+        let stripped: Vec<String> = lines.iter().map(|l| plain(l)).collect();
+        let contents = p.screen().contents();
+        assert_eq!(stripped, contents.lines().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_coloured_transcript_reaches_into_the_scrollback_too() {
+        let mut p = vt100::Parser::new_with_callbacks(3, 20, 100, Title(None));
+        for i in 1..=6 {
+            p.process(format!("\x1b[32mline {i}\x1b[m\r\n").as_bytes());
+        }
+        let t = transcript(&mut p, 4, colored);
+        let want: Vec<String> = (3..=6).map(|i| format!("\x1b[32mline {i}\x1b[m")).collect();
+        assert_eq!(t.lines().collect::<Vec<_>>(), want);
+        assert_eq!(p.screen().scrollback(), 0);
     }
 
     #[test]
