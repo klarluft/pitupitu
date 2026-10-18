@@ -60,6 +60,19 @@ pub trait AgentHost: Send + Sync {
     /// Open a new workspace for `cwd`, with one fresh shell pane.
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created>;
 
+    /// [`AgentHost::create_workspace`] with the cloud's hint where the
+    /// session should run (`terminal` or `herdr`); a host with one place
+    /// to put it ignores the hint.
+    async fn create_workspace_hinted(
+        &self,
+        cwd: &Path,
+        label: &str,
+        driver: Option<&str>,
+    ) -> Result<Created> {
+        let _ = driver;
+        self.create_workspace(cwd, label).await
+    }
+
     /// Open a new tab in an existing workspace, with one fresh shell pane.
     /// `cwd` defaults to the workspace's directory.
     async fn create_tab(
