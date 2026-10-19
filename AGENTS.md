@@ -1,6 +1,6 @@
 # pitupitu (box agent)
 
-The open-source agent that runs on the user's machine and links their coding agents (in herdr, or in terminals it hosts itself) to pitupitu cloud over one outbound WebSocket. Read `README.md` for what it does and `docs/box-link.md` for the protocol.
+The open-source agent that runs on the user's machine and links their coding agents (in herdr, or in terminals it hosts itself) to pitupitu cloud over one outbound WebSocket. Read `README.md` for what it does, `docs/box-link.md` for the protocol and `docs/sessions.md` for what every state and error means on both drivers.
 
 - Keep it small: it serves the box link calls over herdr or its own terminal host, reports its inventory and the home folder's skills, and installs itself as a user service. Conversation, voice and everything else is the cloud's.
 - `crates/herdr` is the only crate that runs `herdr` (`herdr --skill`, `herdr api schema` for exact payloads). Key "a turn finished" on `completion_seq`, never on the `done` status.

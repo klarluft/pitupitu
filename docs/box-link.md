@@ -89,6 +89,8 @@ Nothing is buffered on the box while the link is down; the `hello` after a recon
 
 ## Terminal host
 
+What the states, counters and error codes mean, identically on both drivers, is in [`sessions.md`](sessions.md).
+
 Since 0.3, a box without herdr (or set to `terminal`) serves the same calls from terminals it hosts itself. The cloud cannot tell the difference, except that the terminal host's ids start with `tw` (`tw3`, `tw3:t1`, `tw3:p1`), so they never collide with herdr's.
 
 - **Your own agents, unmodified.** It runs `claude` and `codex` from your `PATH`, as you, in your login shell, signed in by you. It never reads, copies or passes on their credentials, and adds no permission flags: they run in your own permission mode. If an agent is not logged in, its session reports blocked and pitupitu tells you to run it once and log in.
