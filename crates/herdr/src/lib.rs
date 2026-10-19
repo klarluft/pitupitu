@@ -51,6 +51,20 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// `unsupported_agent_kind` when `kinds` is known and lacks `kind`.
+pub fn refuse_unsupported(kinds: &[String], kind: &AgentKind) -> Result<()> {
+    if kinds.is_empty() || kinds.iter().any(|k| k == kind.as_str()) {
+        return Ok(());
+    }
+    Err(Error::Api {
+        code: "unsupported_agent_kind".into(),
+        message: format!(
+            "this box cannot start {kind}; it can start {}",
+            kinds.join(", ")
+        ),
+    })
+}
+
 /// What pitupitu cloud can ask of the box, one box link call per method
 /// (see `docs/box-link.md`). herdr is the only implementation today; the
 /// trait exists so another agent host could be added behind the same calls.
@@ -62,17 +76,27 @@ pub trait AgentHost: Send + Sync {
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created>;
 
     /// [`AgentHost::create_workspace`] with the cloud's hint where the
-    /// session should run (`terminal` or `herdr`); a host with one place
-    /// to put it ignores the hint.
+    /// session should run (`terminal` or `herdr`) and the agent kind it
+    /// means to start there, refused as `unsupported_agent_kind` before
+    /// anything is opened (`docs/sessions.md`, "Kinds"). A host with one
+    /// place to put it ignores the hint.
     async fn create_workspace_hinted(
         &self,
         cwd: &Path,
         label: &str,
         driver: Option<&str>,
+        kind: Option<&AgentKind>,
     ) -> Result<Created> {
         let _ = driver;
+        if let Some(k) = kind {
+            refuse_unsupported(&self.kinds().await, k)?;
+        }
         self.create_workspace(cwd, label).await
     }
+
+    /// The agent kinds this host can start right now. Empty means the
+    /// host cannot say, and nothing is refused on that account.
+    async fn kinds(&self) -> Vec<String>;
 
     /// Open a new tab in an existing workspace, with one fresh shell pane.
     /// `cwd` defaults to the workspace's directory.

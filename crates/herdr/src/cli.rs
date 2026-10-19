@@ -164,6 +164,21 @@ fn blank(text: &str) -> bool {
     true
 }
 
+/// The `kinds: a|b|c` line `herdr agent` prints with its command list
+/// (on stderr, exit status 2: it is usage text, not a command).
+fn parse_kinds(usage: &str) -> Vec<String> {
+    usage
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("kinds:"))
+        .map(|k| {
+            k.split('|')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_api_error(text: &str) -> Option<Error> {
     let value: Value = serde_json::from_str(text.trim()).ok()?;
     let err = value.get("error")?;
@@ -335,6 +350,20 @@ impl AgentHost for HerdrCli {
     /// Idle is not permission (`docs/sessions.md`): the live screen is
     /// looked at first, and a dialog there refuses the prompt whatever
     /// herdr's state says. herdr adds its own check on its state.
+    async fn kinds(&self) -> Vec<String> {
+        match self.exec(&["agent"]).await {
+            Ok((_, stdout, stderr)) => {
+                let k = parse_kinds(&stderr);
+                if k.is_empty() {
+                    parse_kinds(&stdout)
+                } else {
+                    k
+                }
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
     async fn prompt(&self, agent: &str, text: &str) -> Result<AgentInfo> {
         let screen = self
             .run_text(&[
@@ -398,6 +427,21 @@ impl AgentHost for HerdrCli {
 }
 
 #[cfg(test)]
+mod kinds_tests {
+    use super::parse_kinds;
+
+    #[test]
+    fn the_kinds_line_is_read_from_the_usage_text() {
+        let usage = "herdr agent commands:\n  herdr agent list\n  targets accept unique agent names\n  kinds: pi|claude|codex|gemini|agy\n";
+        assert_eq!(
+            parse_kinds(usage),
+            ["pi", "claude", "codex", "gemini", "agy"]
+        );
+        assert!(parse_kinds("no such line").is_empty());
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

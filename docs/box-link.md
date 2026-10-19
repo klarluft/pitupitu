@@ -41,6 +41,7 @@ The box speaks first:
 {"note": "hello", "protocol": 2, "version": "0.2.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "driver": "herdr", "herdr": "herdr 0.9.3",
+ "kinds": ["claude", "codex", "gemini", "agy"],
  "available": [{"kind": "claude", "version": "2.3.1 (Claude Code)"}],
  "recent": [{"path": "/home/me/code/app", "agent": "claude", "at": "2026-10-17T20:00:00Z"}]}
 ```
@@ -49,6 +50,7 @@ then a `home` note. Before `hello` the cloud sends nothing.
 
 - `driver`: where new sessions start: `herdr`, or `terminal` for the box's own terminal host (below).
 - `herdr`: herdr's version, `""` when it does not answer.
+- `kinds`: the agent kinds the driver taking new sessions can start right now (herdr's own list, or `claude` and `codex` for the terminal host). Since 0.4; the cloud refuses a kind not in it before anything is opened (`sessions.md`, "Kinds").
 - `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
@@ -61,7 +63,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | call | args | ok |
 |---|---|---|
 | `list_workspaces` | — | `[Workspace]` |
-| `create_workspace` | `cwd`, `label`, `driver?` (`terminal` or `herdr`: where the cloud would like the session, e.g. `terminal` for scratch work such as lookups so herdr is not littered with them; honoured only while the box's driver setting is `auto`; since 0.3.2) | `Created` |
+| `create_workspace` | `cwd`, `label`, `driver?` (`terminal` or `herdr`: where the cloud would like the session, e.g. `terminal` for scratch work such as lookups so herdr is not littered with them; honoured only while the box's driver setting is `auto`; since 0.3.2), `kind?` (the agent the cloud means to start there; refused as `unsupported_agent_kind` before the workspace opens when the driver cannot start it; a box pinned to herdr while herdr does not answer refuses with `driver_unavailable`; since 0.4) | `Created` |
 | `create_tab` | `workspace`, `cwd?`, `label` | `Created` |
 | `close_workspace` | `workspace` | `null` |
 | `close_tab` | `tab` | `null` |
@@ -78,7 +80,7 @@ An unknown call answers `bad_call`, so calls can be added behind a protocol bump
 ## Notes from the box
 
 - `home`: `{"note": "home", "files": [{"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB. (0.1 also sent `PITUPITU.md`; the person's preferences live in the cloud now.)
-- `inventory`: `{"note": "inventory", "driver": …, "herdr": …, "available": […], "recent": […]}`, the fields of `hello` again: when herdr starts or stops answering, in reply to the cloud's `settings` note, and every five minutes when `recent` changed.
+- `inventory`: `{"note": "inventory", "driver": …, "herdr": …, "kinds": […], "available": […], "recent": […]}`, the fields of `hello` again: when herdr starts or stops answering, in reply to the cloud's `settings` note, and every five minutes when `recent` changed.
 - `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, the full agent list (herdr's and the terminal host's), sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box looks once a second.
 
 ## Notes from the cloud

@@ -85,6 +85,10 @@ impl AgentHost for FakeHost {
         Ok(agent(name, &pane.0, AgentStatus::Idle, 1))
     }
 
+    async fn kinds(&self) -> Vec<String> {
+        vec!["claude".into(), "codex".into()]
+    }
+
     async fn prompt(&self, agent_name: &str, _: &str) -> Result<AgentInfo> {
         self.note(format!("prompt {agent_name}"));
         Ok(agent(agent_name, "w1:p1", AgentStatus::Idle, 1))

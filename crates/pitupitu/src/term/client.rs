@@ -172,6 +172,10 @@ impl AgentHost for TermHost {
         self.call(req).await
     }
 
+    async fn kinds(&self) -> Vec<String> {
+        super::holder::KINDS.iter().map(|k| k.to_string()).collect()
+    }
+
     async fn prompt(&self, agent: &str, text: &str) -> Result<AgentInfo> {
         self.call(json!({"op": "prompt", "agent": agent, "text": text}))
             .await

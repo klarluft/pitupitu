@@ -136,6 +136,7 @@ impl Link {
             } else {
                 String::new()
             },
+            kinds: self.host.kinds().await,
             available: self.available.clone(),
             recent: self.recent().await,
         };
@@ -278,18 +279,26 @@ impl Link {
         let wanted = value
             .get("driver")
             .and_then(Value::as_str)
-            .unwrap_or("auto");
-        let note = {
-            let mut inv = shared.lock().unwrap();
-            if let Some(r) = &self.router {
-                r.set_wanted(wanted);
-                inv.driver = r.driver().to_string();
-            }
-            info!(wanted, driver = %inv.driver, "driver setting");
-            inventory_note(&inv)
-        };
+            .unwrap_or("auto")
+            .to_string();
+        let shared = shared.clone();
+        let router = self.router.clone();
+        let host = self.host.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
+            if let Some(r) = &router {
+                r.set_wanted(&wanted);
+            }
+            let kinds = host.kinds().await;
+            let note = {
+                let mut inv = shared.lock().unwrap();
+                if let Some(r) = &router {
+                    inv.driver = r.driver().to_string();
+                }
+                inv.kinds = kinds;
+                info!(wanted, driver = %inv.driver, "driver setting");
+                inventory_note(&inv)
+            };
             let _ = tx.send(note).await;
         });
     }
@@ -379,6 +388,7 @@ async fn poll(
     let mut recent_tick = tokio::time::interval(INVENTORY_EVERY);
     recent_tick.tick().await;
     let mut herdr_down = p.inventory.lock().unwrap().herdr.is_empty();
+    let mut last_driver = p.inventory.lock().unwrap().driver.clone();
     loop {
         tokio::select! {
             _ = tick.tick() => {}
@@ -415,11 +425,22 @@ async fn poll(
         } else {
             String::new()
         };
+        // The kinds follow the driver: asked again only when it changed.
+        let kinds = match &driver {
+            Some(d) if *d != last_driver => {
+                last_driver = d.clone();
+                Some(host.kinds().await)
+            }
+            _ => None,
+        };
         if !p
             .inventory(&tx, |i| {
                 i.herdr = version;
                 if let Some(d) = driver {
                     i.driver = d;
+                }
+                if let Some(k) = kinds {
+                    i.kinds = k;
                 }
             })
             .await

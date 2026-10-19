@@ -90,6 +90,10 @@ struct CreateWorkspace {
     /// scratch work); honoured only while the driver setting is `auto`.
     #[serde(default)]
     driver: Option<String>,
+    /// The agent the cloud means to start there, refused before the
+    /// workspace is opened when this box cannot start it.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -176,8 +180,12 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         "list_workspaces" => ok(host.list_workspaces().await?),
         "create_workspace" => {
             let a: CreateWorkspace = args(call, a)?;
+            let kind = a
+                .kind
+                .map(|k| k.parse::<herdr::AgentKind>().map_err(CallError::bad_call))
+                .transpose()?;
             ok(host
-                .create_workspace_hinted(&a.cwd, &a.label, a.driver.as_deref())
+                .create_workspace_hinted(&a.cwd, &a.label, a.driver.as_deref(), kind.as_ref())
                 .await?)
         }
         "create_tab" => {
@@ -283,6 +291,29 @@ mod tests {
             dispatch(&host, "close_tab", json!({"tab": "w1:t2"})).await,
             Ok(Value::Null)
         );
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_kind_is_refused_before_the_workspace_opens() {
+        let host = FakeHost::default();
+        let e = dispatch(
+            &host,
+            "create_workspace",
+            json!({"cwd": "/x", "label": "x", "kind": "gemini"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.kind, "api");
+        assert_eq!(e.code.as_deref(), Some("unsupported_agent_kind"));
+        assert!(host.log().is_empty());
+        dispatch(
+            &host,
+            "create_workspace",
+            json!({"cwd": "/x", "label": "x", "kind": "codex"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(host.log(), ["create_workspace /x x"]);
     }
 
     #[tokio::test]

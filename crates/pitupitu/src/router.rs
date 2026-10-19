@@ -8,8 +8,8 @@
 use crate::term;
 use async_trait::async_trait;
 use herdr::{
-    AgentHost, AgentInfo, AgentKind, AgentStatus, Created, PaneId, Result, StartOpts, TabId,
-    Workspace, WorkspaceId,
+    refuse_unsupported, AgentHost, AgentInfo, AgentKind, AgentStatus, Created, Error, PaneId,
+    Result, StartOpts, TabId, Workspace, WorkspaceId,
 };
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,21 +94,39 @@ impl AgentHost for Router {
 
     /// The cloud's hint (`terminal` for scratch work such as lookups, so
     /// herdr is not littered with them) counts only while the setting is
-    /// `auto`; a forced `herdr` or `terminal` wins.
+    /// `auto`; a forced `herdr` or `terminal` wins. A box pinned to herdr
+    /// while herdr does not answer refuses with `driver_unavailable`; a
+    /// kind the chosen driver cannot start with `unsupported_agent_kind`,
+    /// both before anything is opened.
     async fn create_workspace_hinted(
         &self,
         cwd: &Path,
         label: &str,
         driver: Option<&str>,
+        kind: Option<&AgentKind>,
     ) -> Result<Created> {
         let wanted = self.wanted.lock().unwrap().clone();
         let auto = !matches!(wanted.as_str(), "herdr" | "terminal");
+        if wanted == "herdr" && !self.herdr_up() {
+            return Err(Error::Api {
+                code: "driver_unavailable".into(),
+                message: "this box is set to herdr, and herdr does not answer".into(),
+            });
+        }
         let host: &dyn AgentHost = match (auto, driver) {
             (true, Some("terminal")) => &*self.terms,
             (true, Some("herdr")) if self.herdr_up() => &*self.herdr,
             _ => self.new_sessions(),
         };
+        if let Some(k) = kind {
+            refuse_unsupported(&host.kinds().await, k)?;
+        }
         host.create_workspace(cwd, label).await
+    }
+
+    /// What the driver that takes new sessions can start.
+    async fn kinds(&self) -> Vec<String> {
+        self.new_sessions().kinds().await
     }
 
     async fn create_tab(
@@ -237,10 +255,10 @@ mod tests {
         // auto: a lookup goes to the terminal host when the cloud says so,
         // a project task to herdr as usual.
         let p = Path::new("/home/me/pitupitu");
-        r.create_workspace_hinted(p, "pitupitu", Some("terminal"))
+        r.create_workspace_hinted(p, "pitupitu", Some("terminal"), None)
             .await
             .unwrap();
-        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", None)
+        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", None, None)
             .await
             .unwrap();
         assert_eq!(terms.log(), ["create_workspace /home/me/pitupitu pitupitu"]);
@@ -248,7 +266,7 @@ mod tests {
 
         // Forced herdr: the hint is ignored.
         r.set_wanted("herdr");
-        r.create_workspace_hinted(p, "pitupitu", Some("terminal"))
+        r.create_workspace_hinted(p, "pitupitu", Some("terminal"), None)
             .await
             .unwrap();
         assert_eq!(herdr.log().len(), 2);
@@ -256,9 +274,39 @@ mod tests {
 
         // Forced terminal: everything goes there, hint or not.
         r.set_wanted("terminal");
-        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", Some("herdr"))
+        r.create_workspace_hinted(Path::new("/home/me/code/app"), "app", Some("herdr"), None)
             .await
             .unwrap();
         assert_eq!(terms.log().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_kind_the_driver_cannot_start_is_refused_before_anything_opens() {
+        let herdr = FakeHost::default();
+        let terms = FakeHost::default();
+        let r = Router::new(Arc::new(herdr.clone()), Arc::new(terms.clone()));
+        // herdr never answered: the terminal host (claude, codex) serves.
+        assert_eq!(r.kinds().await, ["claude", "codex"]);
+        let gemini: AgentKind = "gemini".parse().unwrap();
+        let e = r
+            .create_workspace_hinted(Path::new("/x"), "x", None, Some(&gemini))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code(), Some("unsupported_agent_kind"));
+        assert!(terms.log().is_empty() && herdr.log().is_empty());
+        let codex: AgentKind = "codex".parse().unwrap();
+        r.create_workspace_hinted(Path::new("/x"), "x", None, Some(&codex))
+            .await
+            .unwrap();
+        assert_eq!(terms.log().len(), 1);
+
+        // Pinned to herdr while it does not answer: refused, not misrouted.
+        r.set_wanted("herdr");
+        let e = r
+            .create_workspace_hinted(Path::new("/x"), "x", None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code(), Some("driver_unavailable"));
+        assert!(herdr.log().is_empty());
     }
 }

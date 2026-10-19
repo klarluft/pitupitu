@@ -43,6 +43,8 @@ pub struct Inventory {
     pub driver: String,
     /// herdr's version; empty when it is not there.
     pub herdr: String,
+    /// The agent kinds the driver taking new sessions can start.
+    pub kinds: Vec<String>,
     pub available: Vec<Available>,
     pub recent: Vec<Recent>,
 }
