@@ -2,7 +2,8 @@
 //! its PTYs, the hooks and the socket protocol. The agent is a stand-in
 //! `claude` script that behaves like Claude Code's hooks would: it reports
 //! that it started, then answers each line it reads and reports the turn
-//! done, and asks for permission when told to.
+//! done, and asks for permission when told to. Like a real agent's TUI, it
+//! redraws the screen once a dialog is answered, so the dialog is gone.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -19,7 +20,7 @@ hook start
 while IFS= read -r line; do
   hook prompt
   case "$line" in
-    ask*) printf 'Do you want to proceed?\n 1. Yes\n 2. No\n'; IFS= read -r answer; echo "answered $answer";;
+    ask*) printf 'Do you want to proceed?\n 1. Yes\n 2. No\n'; IFS= read -r answer; printf '\033[2J\033[H'; echo "answered $answer";;
     quit) exit 0;;
     *) echo "answer: $line";;
   esac

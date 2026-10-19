@@ -775,8 +775,13 @@ impl Holder {
     /// Enter. Returns the state from before the agent reacted.
     async fn prompt(&self, target: &str, text: &str) -> Reply {
         let before = self.with_agent(target, |p, info| {
-            let a = p.agent.as_ref().expect("has an agent");
-            if a.status == Status::Blocked {
+            // Idle is not permission (`docs/sessions.md`): the live screen
+            // decides, not the status the last tick left behind.
+            let screen = p.screen.lock().unwrap().screen().contents();
+            let dialog = detect::dialog(&screen);
+            let a = p.agent.as_mut().expect("has an agent");
+            if a.status == Status::Blocked || dialog.is_some() {
+                a.set(Status::Blocked);
                 return Err(refused(
                     "agent_blocked",
                     "the agent is waiting for an answer to a question or an approval",

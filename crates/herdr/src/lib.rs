@@ -15,6 +15,7 @@
 //!   `state_change_seq` advancing, not on status alone.
 
 mod cli;
+pub mod detect;
 mod types;
 
 pub use cli::HerdrCli;

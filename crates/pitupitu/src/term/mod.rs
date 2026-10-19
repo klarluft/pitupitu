@@ -11,8 +11,11 @@
 
 pub mod attach;
 pub mod client;
-pub mod detect;
 pub mod holder;
+
+/// Screen detection is shared with the herdr adapter: one set of rules for
+/// what a dialog looks like, whichever driver looks.
+pub use herdr::detect;
 
 use std::path::PathBuf;
 

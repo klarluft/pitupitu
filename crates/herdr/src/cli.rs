@@ -332,7 +332,21 @@ impl AgentHost for HerdrCli {
         Ok(info)
     }
 
+    /// Idle is not permission (`docs/sessions.md`): the live screen is
+    /// looked at first, and a dialog there refuses the prompt whatever
+    /// herdr's state says. herdr adds its own check on its state.
     async fn prompt(&self, agent: &str, text: &str) -> Result<AgentInfo> {
+        let screen = self
+            .run_text(&[
+                "agent", "read", agent, "--source", "visible", "--lines", "40",
+            ])
+            .await?;
+        if let Some(d) = crate::detect::dialog(&screen) {
+            return Err(Error::Api {
+                code: "agent_blocked".into(),
+                message: format!("{d:?} dialog on screen; read it and answer with send_keys"),
+            });
+        }
         self.run_json(&["agent", "prompt", agent, text])
             .await
             .and_then(agent_from)
@@ -436,5 +450,67 @@ mod tests {
         let e = cli.read("x", 80).await.unwrap_err();
         assert_eq!(e.code(), Some("agent_not_found"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod prompt_tests {
+    use super::*;
+
+    /// A stand-in `herdr` that logs its arguments and answers `agent read`
+    /// with `screen`, `agent prompt` with an agent.
+    fn fake_herdr(screen: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pitupitu-herdr-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let screen_file = dir.join("screen");
+        std::fs::write(&screen_file, screen).unwrap();
+        let bin = dir.join("herdr");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1 $2\" in\n\
+                 'agent read') cat '{}';;\n\
+                 'agent prompt') echo '{{\"id\":1,\"result\":{{\"agent\":{{\"agent\":\"claude\",\"name\":\"n\",\
+                 \"agent_status\":\"idle\",\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"cwd\":\"/tmp\",\
+                 \"state_change_seq\":3}}}}}}';;\n\
+                 esac\n",
+                log.display(),
+                screen_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (bin, log)
+    }
+
+    #[tokio::test]
+    async fn a_dialog_on_screen_refuses_the_prompt_before_herdr_is_asked() {
+        let (bin, log) =
+            fake_herdr("⏺ Bash(rm -rf build)\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        let e = cli.prompt("n", "hello").await.unwrap_err();
+        assert_eq!(e.code(), Some("agent_blocked"), "{e}");
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("agent read n --source visible"), "{log}");
+        assert!(!log.contains("agent prompt"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_clear_screen_lets_the_prompt_through() {
+        let (bin, log) = fake_herdr("> \n? for shortcuts\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        let info = cli.prompt("n", "hello").await.unwrap();
+        assert_eq!(info.state_change_seq, 3);
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("agent prompt n hello"), "{log}");
     }
 }

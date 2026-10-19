@@ -1,8 +1,8 @@
-//! What the screen of an agent's terminal says, for the states its hooks
-//! cannot report: a dialog waiting for the person (an approval, a
-//! question, the folder trust prompt, a login screen). Only the bottom of
-//! the screen is looked at, so a dialog quoted in the conversation above
-//! does not count.
+//! What the screen of an agent's terminal says, shared by both drivers
+//! (`docs/sessions.md`, "Dialogs"): the states hooks cannot report, a
+//! dialog waiting for the person (an approval, a question, the folder
+//! trust prompt, a login screen). Only the bottom of the screen is looked
+//! at, so a dialog quoted in the conversation above does not count.
 
 /// Lines from the bottom of the screen a dialog must be in.
 const BOTTOM: usize = 18;
