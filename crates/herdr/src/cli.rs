@@ -10,6 +10,10 @@ use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
+/// How long the screen must hold still after `idle` before an agent counts
+/// as ready for a prompt.
+const SETTLE: Duration = Duration::from_millis(1500);
+
 /// Drives herdr by shelling out to its CLI.
 ///
 /// The CLI only works from inside a herdr-managed pane or with the server's
@@ -128,6 +132,33 @@ impl HerdrCli {
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
         ))
+    }
+
+    /// Ready for input means more than herdr's `idle`: right after start
+    /// (and after the trust dialog, when Claude Code reloads) the status
+    /// flips to idle a moment before the agent reads keys, and a prompt
+    /// typed then is lost. So the visible screen must also hold still for
+    /// a while, as the terminal host requires (`docs/sessions.md`).
+    async fn settled(&self, agent: &str, deadline: std::time::Instant) -> Result<()> {
+        let mut last = String::new();
+        let mut since = std::time::Instant::now();
+        loop {
+            let screen = self
+                .run_text(&[
+                    "agent", "read", agent, "--source", "visible", "--lines", "40",
+                ])
+                .await?;
+            if screen != last {
+                last = screen;
+                since = std::time::Instant::now();
+            } else if since.elapsed() >= SETTLE {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
     }
 
     /// Claude Code's first-run dialog in a directory it has not seen. The
@@ -333,6 +364,7 @@ impl AgentHost for HerdrCli {
             Err(e) => return Err(e),
         }
         let settle = opts.timeout.unwrap_or(Duration::from_secs(30));
+        let deadline = std::time::Instant::now() + settle;
         let info = self
             .wait(name, &[AgentStatus::Idle, AgentStatus::Done], settle)
             .await?;
@@ -344,7 +376,8 @@ impl AgentHost for HerdrCli {
                 why: format!("{}:\n{}", info.agent_status, screen.trim()),
             });
         }
-        Ok(info)
+        self.settled(name, deadline).await?;
+        self.agent(name).await
     }
 
     /// Idle is not permission (`docs/sessions.md`): the live screen is

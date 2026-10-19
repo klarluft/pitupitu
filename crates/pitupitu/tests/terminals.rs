@@ -2,8 +2,7 @@
 //! its PTYs, the hooks and the socket protocol. The agent is a stand-in
 //! `claude` script that behaves like Claude Code's hooks would: it reports
 //! that it started, then answers each line it reads and reports the turn
-//! done, and asks for permission when told to. Like a real agent's TUI, it
-//! redraws the screen once a dialog is answered, so the dialog is gone.
+//! done, and asks for permission when told to.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -11,33 +10,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-const FAKE_CLAUDE: &str = r#"#!/bin/sh
-# Stand-in for Claude Code: hooks via the pitupitu binary, like --settings would.
-hook() { "$FAKE_PITUPITU" hook "$PITUPITU_PANE" "$1" </dev/null >/dev/null 2>&1; }
-printf '\033]2;Stand-in session\007'
-echo "fake claude ready (args: $*)"
-hook start
-while IFS= read -r line; do
-  hook prompt
-  case "$line" in
-    ask*) printf 'Do you want to proceed?\n 1. Yes\n 2. No\n'; IFS= read -r answer; printf '\033[2J\033[H'; echo "answered $answer";;
-    quit) exit 0;;
-    *) echo "answer: $line";;
-  esac
-  hook stop
-done
-"#;
-
-/// The holder, stopped when the test ends, passed or not: a holder with
-/// terminals open keeps running by design.
-struct Holder(std::process::Child);
-
-impl Drop for Holder {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+mod common;
+use common::{Holder, FAKE_CLAUDE};
 
 async fn call(socket: &Path, req: Value) -> Value {
     let stream = UnixStream::connect(socket).await.unwrap();

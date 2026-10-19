@@ -4,24 +4,11 @@
 //! runs; `prefs`, `box`, `default` and `settings` change the account's
 //! settings; `--skill` teaches the person's agents all of this.
 
-mod calls;
-mod config;
-mod device;
-mod home;
-mod inventory;
-mod link;
-mod router;
-mod service;
-mod settings;
-mod skill;
-mod term;
-#[cfg(test)]
-mod testhost;
-
 use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use config::Config;
 use herdr::HerdrCli;
+use pitupitu::config::Config;
+use pitupitu::{config, device, home, inventory, link, router, service, settings, skill, term};
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;

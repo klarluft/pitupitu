@@ -34,7 +34,15 @@ Two counters carry the meaning instead:
   completion seen in the same look.
 
 `launch_pending` and `interactive_ready` describe start-up only: a session
-is silent until `interactive_ready`.
+is silent until `interactive_ready`. `start_agent` returns only when the
+agent is ready for a prompt, which means more than a reported `idle`:
+right after start, and after the trust dialog when Claude Code reloads,
+the status turns idle a moment before the agent reads keys, and a prompt
+typed then is lost. Both drivers also require the screen to hold still
+for about a second and a half.
+
+`completion_seq` is absent until the first turn completes (herdr) or `0`
+(the terminal host); a comparison treats absent as lower than any value.
 
 ## Prompts
 

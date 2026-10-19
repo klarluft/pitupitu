@@ -13,6 +13,7 @@ cargo test
 - `crates/herdr` is the only code that runs `herdr`. Use `herdr --skill` and `herdr api schema` for exact commands and payloads.
 - The box link is a contract with pitupitu cloud ([docs/box-link.md](docs/box-link.md)). A new call needs a protocol bump; never widen what the cloud can do on the box beyond named, typed calls.
 - When testing against a live herdr, create your own workspace or tab and close it afterwards; don't touch panes you didn't create.
+- `crates/pitupitu/tests/conformance.rs` runs one scenario against both drivers (`docs/sessions.md`). The terminal host run is part of `cargo test`; `PITUPITU_LIVE_HERDR=1 cargo test --test conformance` runs it against the herdr and the signed-in Claude Code on your machine, in a temporary folder, and should pass before a release.
 - Logs carry metadata only: never prompts, agent output or file contents.
 
 ## Releasing
