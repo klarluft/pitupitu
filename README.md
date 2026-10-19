@@ -70,6 +70,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
 | `pitupitu sessions` | the sessions in this box's own terminals (when herdr is not used) |
 | `pitupitu attach [session]` | show one live here and type into it; `Ctrl-\` detaches, it keeps running |
+| `pitupitu update` | show the newer release and what is running, ask, then install it and restart the box agent; sessions keep running (`--check` only looks, `--yes` for a script, `--no-restart`) |
 | `pitupitu uninstall` | stop and remove the service; config and home folder stay |
 
 Every settings command takes `--json` and never prompts without a terminal, so your agents can run them.
@@ -80,7 +81,13 @@ Environment: `PITUPITU_CONFIG` (config file), `PITUPITU_CLOUD_URL`, `PITUPITU_CL
 
 ## Updating
 
-pitupitu never updates itself. Run the install command again (or `brew upgrade pitupitu`), then `pitupitu setup` (or restart the service). The cloud accepts the current and the previous box protocol; an older box is told to update.
+pitupitu never updates itself. `pitupitu status` and the page at pitupitu.chat say when a newer release exists (the box asks GitHub a few times a day). Then:
+
+```sh
+pitupitu update
+```
+
+shows the version it would install, the release notes link and what is running right now, and asks before doing anything. It replaces the binary (checked against the release's SHA-256) and restarts only the box agent. Your sessions are not touched: herdr is a separate program, and the box's own terminals live in their own process; the link to the cloud drops for a few seconds. `pitupitu update --check` only looks; `--yes` answers for you, for a script; `--no-restart` leaves the running service on the old version until you restart it. Running the install command again does the same without the questions; a Homebrew install updates with `brew upgrade pitupitu` instead, and `pitupitu update` says so. The cloud accepts the current and the previous box protocol; an older box is told to update.
 
 ## Contributing
 

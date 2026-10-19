@@ -15,3 +15,4 @@ pub mod skill;
 pub mod term;
 #[cfg(test)]
 pub mod testhost;
+pub mod update;

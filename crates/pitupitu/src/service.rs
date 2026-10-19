@@ -216,6 +216,30 @@ pub fn install(config: &Path) -> Result<Installed> {
     }
 }
 
+/// Restart the service so it runs the binary now at its path. `false`
+/// when no service is installed. Only the box agent restarts: the
+/// terminal holder and herdr are not part of the service.
+pub fn restart() -> Result<bool> {
+    if cfg!(target_os = "macos") {
+        if !launchd_file().exists() {
+            return Ok(false);
+        }
+        run(
+            "launchctl",
+            &["kickstart", "-k", &format!("gui/{}/{LABEL}", uid()?)],
+        )?;
+        Ok(true)
+    } else if cfg!(target_os = "linux") {
+        if !systemd_file().exists() {
+            return Ok(false);
+        }
+        run("systemctl", &["--user", "restart", UNIT])?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 pub fn uninstall() -> Result<Option<PathBuf>> {
     if cfg!(target_os = "macos") {
         let file = launchd_file();

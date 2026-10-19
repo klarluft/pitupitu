@@ -33,6 +33,8 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 const STABLE: Duration = Duration::from_secs(30);
 /// How often the recent project folders are looked at again.
 const INVENTORY_EVERY: Duration = Duration::from_secs(300);
+/// How often GitHub is asked for the newest release.
+const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 pub struct Link {
     pub url: String,
@@ -52,6 +54,9 @@ pub struct Link {
     pub router: Option<Arc<Router>>,
     /// Shortened in tests.
     pub ping_timeout: Duration,
+    /// Ask GitHub for the newest release now and then (`latest` in the
+    /// inventory). Off in tests.
+    pub updates: bool,
 }
 
 /// The inventory as last sent, shared by the poller and the handler of
@@ -137,6 +142,7 @@ impl Link {
                 String::new()
             },
             kinds: self.host.kinds().await,
+            latest: None,
             available: self.available.clone(),
             recent: self.recent().await,
         };
@@ -167,6 +173,7 @@ impl Link {
                 herdr_version: self.herdr_version.clone(),
                 inventory: shared.clone(),
                 router: self.router.clone(),
+                updates: self.updates,
             },
             signature(&agents),
             files,
@@ -347,6 +354,7 @@ struct Polled {
     host: Arc<dyn AgentHost>,
     home_dir: PathBuf,
     history: Option<PathBuf>,
+    updates: bool,
     herdr_version: String,
     inventory: Shared,
     router: Option<Arc<Router>>,
@@ -387,11 +395,20 @@ async fn poll(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut recent_tick = tokio::time::interval(INVENTORY_EVERY);
     recent_tick.tick().await;
+    // The first tick comes at once: the newest release is known early.
+    let mut update_tick = tokio::time::interval(UPDATE_EVERY);
     let mut herdr_down = p.inventory.lock().unwrap().herdr.is_empty();
     let mut last_driver = p.inventory.lock().unwrap().driver.clone();
     loop {
         tokio::select! {
             _ = tick.tick() => {}
+            _ = update_tick.tick(), if p.updates => {
+                let latest = crate::update::newer().await;
+                if !p.inventory(&tx, |i| i.latest = latest).await {
+                    return;
+                }
+                continue;
+            }
             _ = recent_tick.tick() => {
                 if let Some(h) = p.history.clone() {
                     let recent = tokio::task::spawn_blocking(move || inventory::recent(&h))
@@ -535,6 +552,7 @@ mod tests {
             history: None,
             router: None,
             ping_timeout: PING_TIMEOUT,
+            updates: false,
         }
     }
 

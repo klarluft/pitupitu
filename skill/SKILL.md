@@ -34,6 +34,10 @@ Every command takes `--json` and never prompts when there is no terminal.
 
 Change preferences by reading them first (`pitupitu prefs --json`), editing the text, and writing it back whole with `pitupitu prefs set -`; keep what the person did not ask to change.
 
+## Updating
+
+`pitupitu update --check` says whether a newer release exists (`--json` for `{"current","latest","update_available"}`). `pitupitu update` installs it: it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking. Sessions keep running through an update; only the box agent restarts.
+
 ## Not here
 
 The conversation, voice, minutes and billing are on https://pitupitu.chat (the page, and `/app/account`). Removing the service: `pitupitu uninstall`.

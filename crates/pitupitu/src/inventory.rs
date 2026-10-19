@@ -45,6 +45,8 @@ pub struct Inventory {
     pub herdr: String,
     /// The agent kinds the driver taking new sessions can start.
     pub kinds: Vec<String>,
+    /// A newer release than this box runs, when GitHub said so.
+    pub latest: Option<String>,
     pub available: Vec<Available>,
     pub recent: Vec<Recent>,
 }

@@ -50,6 +50,7 @@ then a `home` note. Before `hello` the cloud sends nothing.
 
 - `driver`: where new sessions start: `herdr`, or `terminal` for the box's own terminal host (below).
 - `herdr`: herdr's version, `""` when it does not answer.
+- `latest` (in `inventory`): a newer release than this box runs, as `"0.4.0"`, or absent; the box asks GitHub when it starts and every six hours. The person updates with `pitupitu update`; the box never updates itself. Since 0.4.
 - `kinds`: the agent kinds the driver taking new sessions can start right now (herdr's own list, or `claude` and `codex` for the terminal host). Since 0.4; the cloud refuses a kind not in it before anything is opened (`sessions.md`, "Kinds").
 - `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
@@ -80,7 +81,7 @@ An unknown call answers `bad_call`, so calls can be added behind a protocol bump
 ## Notes from the box
 
 - `home`: `{"note": "home", "files": [{"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB. (0.1 also sent `PITUPITU.md`; the person's preferences live in the cloud now.)
-- `inventory`: `{"note": "inventory", "driver": …, "herdr": …, "kinds": […], "available": […], "recent": […]}`, the fields of `hello` again: when herdr starts or stops answering, in reply to the cloud's `settings` note, and every five minutes when `recent` changed.
+- `inventory`: `{"note": "inventory", "driver": …, "herdr": …, "kinds": […], "latest": …, "available": […], "recent": […]}`, the fields of `hello` again: when herdr starts or stops answering, in reply to the cloud's `settings` note, every five minutes when `recent` changed, and when the newest release known changes.
 - `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, the full agent list (herdr's and the terminal host's), sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box looks once a second.
 
 ## Notes from the cloud

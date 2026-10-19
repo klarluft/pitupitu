@@ -8,7 +8,9 @@ use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
-use pitupitu::{config, device, home, inventory, link, router, service, settings, skill, term};
+use pitupitu::{
+    config, device, home, inventory, link, router, service, settings, skill, term, update,
+};
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -60,6 +62,20 @@ enum Cmd {
     Status,
     /// Stop and remove the user service. The config and home folder stay.
     Uninstall,
+    /// Update this box agent: shows the newer version and what is running,
+    /// asks, then replaces the binary and restarts the box agent. Running
+    /// sessions are not touched.
+    Update {
+        /// Update without asking (needed when there is no terminal).
+        #[arg(long)]
+        yes: bool,
+        /// Only say whether a newer version exists.
+        #[arg(long)]
+        check: bool,
+        /// Replace the binary but leave the service running the old one.
+        #[arg(long)]
+        no_restart: bool,
+    },
     /// What pitupitu knows about you and your machines (read in every conversation).
     Prefs {
         #[command(subcommand)]
@@ -243,6 +259,11 @@ async fn main() -> Result<()> {
         }
         Cmd::Connect => connect(&Config::load(&path)?).await,
         Cmd::Status => status(&Config::load(&path)?).await,
+        Cmd::Update {
+            yes,
+            check,
+            no_restart,
+        } => update_cmd(yes, check, no_restart, as_json).await,
         Cmd::Uninstall => {
             match service::uninstall()? {
                 Some(file) => eprintln!("removed {}", file.display()),
@@ -485,6 +506,7 @@ async fn connect(cfg: &Config) -> Result<()> {
         history: Some(config::home_dir()),
         router: Some(router),
         ping_timeout: link::PING_TIMEOUT,
+        updates: true,
     };
     tokio::select! {
         r = link.run() => r,
@@ -625,6 +647,80 @@ async fn setup(
     Ok(())
 }
 
+/// `pitupitu update`: never silent, never unasked. What would change and
+/// what is running are shown first; the person says yes every time.
+async fn update_cmd(yes: bool, check: bool, no_restart: bool, as_json: bool) -> Result<()> {
+    let current = update::current();
+    let latest = update::latest()
+        .await
+        .map_err(|e| anyhow::anyhow!("could not check for a newer version: {e:#}"))?;
+    let newer = update::is_newer(&latest, current);
+    if as_json && check {
+        println!(
+            "{}",
+            json!({"current": current, "latest": latest, "update_available": newer})
+        );
+        return Ok(());
+    }
+    if !newer {
+        println!("pitupitu {current} is the newest release");
+        return Ok(());
+    }
+    println!("pitupitu {current} -> {latest}");
+    println!("release notes: {}", update::notes_url(&latest));
+    if check {
+        println!("run `pitupitu update` to install it");
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    println!("binary: {}", exe.display());
+    if exe.components().any(|c| c.as_os_str() == "Cellar") {
+        println!("installed with Homebrew: run `brew upgrade pitupitu` instead");
+        return Ok(());
+    }
+    let own = term_agents().await.len();
+    let in_herdr = {
+        use herdr::AgentHost;
+        HerdrCli::new()
+            .list_agents()
+            .await
+            .map(|l| l.len())
+            .unwrap_or(0)
+    };
+    println!(
+        "running now: {own} session{} in this box's own terminals, {in_herdr} in herdr",
+        if own == 1 { "" } else { "s" }
+    );
+    println!(
+        "they keep running: herdr is a separate program and the terminals live in their own \
+         process; only the box agent restarts, and its link to pitupitu cloud drops for a few \
+         seconds"
+    );
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            bail!("no terminal to ask on; run `pitupitu update --yes` to update without asking");
+        }
+        let answer = ask("update now? y/n", "n");
+        if !answer.to_lowercase().starts_with('y') {
+            eprintln!("not updated");
+            return Ok(());
+        }
+    }
+    let (dir, binary) = update::download(&latest).await?;
+    let installed = update::install(&binary, &exe);
+    let _ = std::fs::remove_dir_all(&dir);
+    installed?;
+    println!("installed pitupitu {latest} at {}", exe.display());
+    if no_restart {
+        println!("restart `pitupitu connect` (or the service) to run it");
+    } else if service::restart()? {
+        println!("box agent restarted; sessions untouched");
+    } else {
+        println!("no service installed; restart `pitupitu connect` yourself");
+    }
+    Ok(())
+}
+
 async fn status(cfg: &Config) -> Result<()> {
     println!("config: {}", cfg.path.display());
     println!("cloud: {}", cfg.cloud_url);
@@ -670,5 +766,12 @@ async fn status(cfg: &Config) -> Result<()> {
         if own.len() == 1 { "" } else { "s" }
     );
     println!("service: {}", service::status());
+    match update::newer().await {
+        Some(v) => println!(
+            "version: {} (newer release {v}: `pitupitu update`)",
+            update::current()
+        ),
+        None => println!("version: {}", update::current()),
+    }
     Ok(())
 }
