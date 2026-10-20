@@ -72,7 +72,7 @@ async fn serve(archive: Vec<u8>, sum: String, bad_sum: bool) -> String {
 }
 
 /// The binary under test, copied where the test may replace it, run with
-/// nothing of the person's reachable: no herdr, no terminal holder. Run
+/// nothing of the person's reachable: no herdr. Run
 /// asynchronously so the stand-in server on this runtime keeps serving.
 async fn run(exe: &PathBuf, url: &str, args: &[&str]) -> (bool, String) {
     let mut tries = 0;
@@ -81,7 +81,6 @@ async fn run(exe: &PathBuf, url: &str, args: &[&str]) -> (bool, String) {
             .args(args)
             .env("PITUPITU_RELEASES_URL", url)
             .env("HERDR_BIN", "/nonexistent/herdr")
-            .env("PITUPITU_TERMS_SOCKET", "/nonexistent/terms.sock")
             .stdin(std::process::Stdio::null())
             .output()
             .await;

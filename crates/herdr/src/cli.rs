@@ -138,7 +138,7 @@ impl HerdrCli {
     /// (and after the trust dialog, when Claude Code reloads) the status
     /// flips to idle a moment before the agent reads keys, and a prompt
     /// typed then is lost. So the visible screen must also hold still for
-    /// a while, as the terminal host requires (`docs/sessions.md`).
+    /// a while (`docs/sessions.md`).
     async fn settled(&self, agent: &str, deadline: std::time::Instant) -> Result<()> {
         let mut last = String::new();
         let mut since = std::time::Instant::now();
@@ -161,21 +161,19 @@ impl HerdrCli {
         }
     }
 
-    /// Claude Code's first-run dialog in a directory it has not seen. The
-    /// highlighted row carries `❯`; "No, exit" is the default.
+    /// The folder trust dialog, answered without changing how the agent
+    /// asks for permission ([`crate::detect::trust_keys`]): Claude Code's
+    /// "Yes, I trust this folder", Codex's "No, ask me to approve".
     async fn answer_trust_prompt(&self, agent: &str) -> Result<bool> {
         let screen = self.read(agent, 40).await?;
-        if !screen.contains("trust this folder") {
+        if crate::detect::dialog(&screen) != Some(crate::detect::Dialog::Trust) {
             return Ok(false);
         }
-        let yes_highlighted = screen.lines().any(|l| l.contains('❯') && l.contains("Yes"));
-        let keys: &[&str] = if yes_highlighted {
-            &["enter"]
-        } else {
-            &["down", "enter"]
+        let Some(keys) = crate::detect::trust_keys(&screen) else {
+            return Ok(false);
         };
         debug!(agent, ?keys, "answering trust prompt");
-        self.send_keys(agent, keys).await?;
+        self.send_keys(agent, &keys).await?;
         Ok(true)
     }
 }
@@ -380,9 +378,9 @@ impl AgentHost for HerdrCli {
         self.agent(name).await
     }
 
-    /// Idle is not permission (`docs/sessions.md`): the live screen is
-    /// looked at first, and a dialog there refuses the prompt whatever
-    /// herdr's state says. herdr adds its own check on its state.
+    /// The kinds this herdr knows, from `herdr agent`'s usage text. That
+    /// is printed without a server, so whether one answers is the
+    /// caller's to say.
     async fn kinds(&self) -> Vec<String> {
         match self.exec(&["agent"]).await {
             Ok((_, stdout, stderr)) => {
@@ -397,6 +395,9 @@ impl AgentHost for HerdrCli {
         }
     }
 
+    /// Idle is not permission (`docs/sessions.md`): the live screen is
+    /// looked at first, and a dialog there refuses the prompt whatever
+    /// herdr's state says. herdr adds its own check on its state.
     async fn prompt(&self, agent: &str, text: &str) -> Result<AgentInfo> {
         let screen = self
             .run_text(&[

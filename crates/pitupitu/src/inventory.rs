@@ -39,7 +39,7 @@ pub struct Recent {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Inventory {
-    /// What serves the calls: `herdr` (the terminal host comes later).
+    /// What serves the calls: always `herdr`.
     pub driver: String,
     /// herdr's version; empty when it is not there.
     pub herdr: String,

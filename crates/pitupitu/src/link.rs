@@ -1,12 +1,11 @@
 //! The box link: one outbound WebSocket to pitupitu cloud (`GET /v1/box`),
-//! over which the cloud drives the agents on this machine, through herdr
-//! or the terminal host (`router.rs`). Nothing connects in.
+//! over which the cloud drives the agents on this machine, through herdr.
+//! Nothing connects in.
 //! The protocol is in `docs/box-link.md`.
 
 use crate::calls::{self, CallError};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
-use crate::router::Router;
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use herdr::{AgentHost, AgentInfo};
@@ -48,10 +47,6 @@ pub struct Link {
     /// Where the agents keep their session history (the user's home
     /// directory); `None` sends no recent folders.
     pub history: Option<PathBuf>,
-    /// herdr and the terminal host behind `host`, when it is the router:
-    /// says which driver serves new sessions and takes the cloud's
-    /// setting. `None` (tests): herdr only.
-    pub router: Option<Arc<Router>>,
     /// Shortened in tests.
     pub ping_timeout: Duration,
     /// Ask GitHub for the newest release now and then (`latest` in the
@@ -131,12 +126,8 @@ impl Link {
             }
         };
         let inv = Inventory {
-            driver: self
-                .router
-                .as_ref()
-                .map_or("herdr", |r| r.driver())
-                .to_string(),
-            herdr: if self.router.as_ref().map_or(herdr_up, |r| r.herdr_up()) {
+            driver: "herdr".into(),
+            herdr: if herdr_up {
                 self.herdr_version.clone()
             } else {
                 String::new()
@@ -172,7 +163,6 @@ impl Link {
                 history: self.history.clone(),
                 herdr_version: self.herdr_version.clone(),
                 inventory: shared.clone(),
-                router: self.router.clone(),
                 updates: self.updates,
             },
             signature(&agents),
@@ -191,7 +181,7 @@ impl Link {
                         Some(m) => m.context("reading from the cloud")?,
                     };
                     match msg {
-                        Message::Text(t) => self.incoming(t.as_str(), &tx, &shared),
+                        Message::Text(t) => self.incoming(t.as_str(), &tx),
                         // Pong answers are queued by the library and flushed
                         // on the next read or write.
                         Message::Ping(_) => last_ping = Instant::now(),
@@ -221,17 +211,15 @@ impl Link {
     /// A frame from the cloud: a call is run on its own task, the reply
     /// goes back through `tx`. Only the call's name is logged, never its
     /// arguments or result.
-    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>, shared: &Shared) {
+    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>) {
         let Ok(value) = serde_json::from_str::<Value>(frame) else {
             warn!("unreadable frame from the cloud");
             return;
         };
         if let Some(note) = value.get("note").and_then(Value::as_str) {
-            if note == "settings" {
-                self.settings(&value, tx, shared);
-            } else {
-                debug!(note, "note from the cloud");
-            }
+            // Protocol 2's `settings` note (the driver) has nothing left
+            // to set: herdr serves every call.
+            debug!(note, "note from the cloud");
             return;
         }
         let Some(id) = value.get("id").cloned() else {
@@ -277,37 +265,6 @@ impl Link {
                 .unwrap_or_default(),
             None => Vec::new(),
         }
-    }
-
-    /// `{"note": "settings", "driver": …}`: which driver the person chose
-    /// for this box (`auto`, `herdr`, `terminal`). Answered with the
-    /// inventory, which says what serves new sessions now.
-    fn settings(&self, value: &Value, tx: &mpsc::Sender<Value>, shared: &Shared) {
-        let wanted = value
-            .get("driver")
-            .and_then(Value::as_str)
-            .unwrap_or("auto")
-            .to_string();
-        let shared = shared.clone();
-        let router = self.router.clone();
-        let host = self.host.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            if let Some(r) = &router {
-                r.set_wanted(&wanted);
-            }
-            let kinds = host.kinds().await;
-            let note = {
-                let mut inv = shared.lock().unwrap();
-                if let Some(r) = &router {
-                    inv.driver = r.driver().to_string();
-                }
-                inv.kinds = kinds;
-                info!(wanted, driver = %inv.driver, "driver setting");
-                inventory_note(&inv)
-            };
-            let _ = tx.send(note).await;
-        });
     }
 }
 
@@ -357,7 +314,6 @@ struct Polled {
     updates: bool,
     herdr_version: String,
     inventory: Shared,
-    router: Option<Arc<Router>>,
 }
 
 impl Polled {
@@ -398,7 +354,6 @@ async fn poll(
     // The first tick comes at once: the newest release is known early.
     let mut update_tick = tokio::time::interval(UPDATE_EVERY);
     let mut herdr_down = p.inventory.lock().unwrap().herdr.is_empty();
-    let mut last_driver = p.inventory.lock().unwrap().driver.clone();
     loop {
         tokio::select! {
             _ = tick.tick() => {}
@@ -422,12 +377,7 @@ async fn poll(
             }
         }
         let listed = host.list_agents().await;
-        // With the router, herdr's state is its own: the list comes from
-        // the terminal host too.
-        let herdr_ok = match &p.router {
-            Some(r) => r.herdr_up(),
-            None => listed.is_ok(),
-        };
+        let herdr_ok = listed.is_ok();
         if herdr_ok == herdr_down {
             herdr_down = !herdr_ok;
             if herdr_ok {
@@ -436,32 +386,12 @@ async fn poll(
                 warn!("herdr does not answer");
             }
         }
-        let driver = p.router.as_ref().map(|r| r.driver().to_string());
         let version = if herdr_ok {
             p.herdr_version.clone()
         } else {
             String::new()
         };
-        // The kinds follow the driver: asked again only when it changed.
-        let kinds = match &driver {
-            Some(d) if *d != last_driver => {
-                last_driver = d.clone();
-                Some(host.kinds().await)
-            }
-            _ => None,
-        };
-        if !p
-            .inventory(&tx, |i| {
-                i.herdr = version;
-                if let Some(d) = driver {
-                    i.driver = d;
-                }
-                if let Some(k) = kinds {
-                    i.kinds = k;
-                }
-            })
-            .await
-        {
+        if !p.inventory(&tx, |i| i.herdr = version).await {
             return;
         }
         match listed {
@@ -550,7 +480,6 @@ mod tests {
                 version: "2.3.1 (Claude Code)".into(),
             }],
             history: None,
-            router: None,
             ping_timeout: PING_TIMEOUT,
             updates: false,
         }
@@ -615,15 +544,6 @@ mod tests {
         let note = next_json(&mut ws).await;
         assert_eq!(note["note"], "home");
         assert_eq!(note["files"][0]["text"], "Deploy steps.");
-
-        // The driver setting is answered with the inventory; this version
-        // stays on herdr whatever is asked.
-        ws.send(text(&json!({"note": "settings", "driver": "terminal"})))
-            .await
-            .unwrap();
-        let note = next_json(&mut ws).await;
-        assert_eq!(note["note"], "inventory");
-        assert_eq!(note["driver"], "herdr");
 
         ws.close(Some(CloseFrame {
             code: CloseCode::from(4006),

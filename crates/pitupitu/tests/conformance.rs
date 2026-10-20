@@ -1,13 +1,8 @@
-//! One scenario, both drivers (`docs/sessions.md`). The same steps run
-//! against the terminal host (always, with the stand-in agent) and
-//! against a live herdr with a real Claude Code when
-//! `PITUPITU_LIVE_HERDR=1`. Any difference in states, counters or error
-//! codes is a failure, not a support ticket.
-
-mod common;
+//! One scenario against a live herdr with a real Claude Code
+//! (`docs/sessions.md`), when `PITUPITU_LIVE_HERDR=1`: what every state,
+//! counter and error code means is checked here, not in a support ticket.
 
 use herdr::{AgentHost, AgentInfo, AgentKind, AgentStatus, HerdrCli, StartOpts, WorkspaceId};
-use pitupitu::term::client::TermHost;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -58,7 +53,7 @@ async fn scenario(host: &dyn AgentHost, cwd: &Path, name: &str, s: Script<'_>) {
     assert!(kinds.iter().any(|k| k == s.kind), "{kinds:?}");
     let bogus: AgentKind = "no-such-agent".parse().unwrap();
     let e = host
-        .create_workspace_hinted(cwd, "conformance", None, Some(&bogus))
+        .create_workspace_for(cwd, "conformance", Some(&bogus))
         .await
         .unwrap_err();
     assert_eq!(e.code(), Some("unsupported_agent_kind"), "{e}");
@@ -69,7 +64,7 @@ async fn scenario(host: &dyn AgentHost, cwd: &Path, name: &str, s: Script<'_>) {
 
     // A workspace with one shell pane, listed.
     let created = host
-        .create_workspace_hinted(cwd, "conformance", None, Some(&kind))
+        .create_workspace_for(cwd, "conformance", Some(&kind))
         .await
         .unwrap();
     assert_eq!(created.cwd, cwd);
@@ -162,26 +157,6 @@ async fn scenario(host: &dyn AgentHost, cwd: &Path, name: &str, s: Script<'_>) {
         assert!(Instant::now() < end, "the session did not end: {ws:?}");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-}
-
-#[tokio::test]
-async fn the_terminal_host_passes_the_scenario() {
-    let dir = tempfile::tempdir().unwrap();
-    let (_holder, socket, work) = common::start_holder(dir.path()).await;
-    let host = TermHost { socket };
-    scenario(
-        &host,
-        &work,
-        "conformance",
-        Script {
-            kind: "claude",
-            agent_args: vec!["--model".into(), "haiku".into()],
-            question: "hello there",
-            expect: "answer: hello there",
-            ask: Some(("ask me", &["1", "enter"], "answered 1")),
-        },
-    )
-    .await;
 }
 
 /// `PITUPITU_LIVE_HERDR=1 cargo test --test conformance`: a running herdr

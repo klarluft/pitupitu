@@ -2,7 +2,7 @@
 //! box never updates itself: the person runs the update, sees what would
 //! change and what is running, and says yes each time. Replacing the
 //! binary and restarting the box agent touches no session: herdr is a
-//! separate program and the terminal host's holder a separate process.
+//! separate program, and its server is not part of the service.
 //!
 //! Releases are GitHub releases of `klarluft/pitupitu`, packaged by
 //! `.github/workflows/release.yml`: `<name>.tar.gz` holding

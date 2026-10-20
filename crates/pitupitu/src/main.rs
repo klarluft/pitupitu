@@ -8,9 +8,7 @@ use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
-use pitupitu::{
-    config, device, home, inventory, link, router, service, settings, skill, term, update,
-};
+use pitupitu::{config, device, home, inventory, link, service, settings, skill, update};
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -20,7 +18,7 @@ use std::sync::Arc;
 #[command(
     name = "pitupitu",
     version,
-    about = "Links this machine's coding agents (in herdr, or in its own terminals) to pitupitu cloud"
+    about = "Links this machine's coding agents, running in herdr, to pitupitu cloud"
 )]
 struct Cli {
     /// Config file (default: $PITUPITU_CONFIG or ~/.config/pitupitu/pitupitu.toml).
@@ -81,7 +79,7 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PrefsCmd>,
     },
-    /// This box's note, driver and on/off.
+    /// This box's name, note, agent and on/off.
     #[command(name = "box")]
     Box {
         #[command(subcommand)]
@@ -134,24 +132,6 @@ enum Cmd {
         #[command(subcommand)]
         action: SkillCmd,
     },
-    /// Show a session of this box's own terminals live here (Ctrl-\\ detaches).
-    Attach {
-        /// The session's name or pane, as `pitupitu sessions` lists them
-        /// (default: the only one, or the newest).
-        session: Option<String>,
-    },
-    /// The sessions in this box's own terminals.
-    Sessions,
-    /// Hold the box's own terminals (started by `connect` when needed).
-    #[command(hide = true)]
-    Terminals,
-    /// What an agent's hook reports (run by the agents themselves).
-    #[command(hide = true)]
-    Hook {
-        pane: String,
-        event: String,
-        arg: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -174,11 +154,6 @@ enum BoxCmd {
         text: Vec<String>,
         #[arg(long)]
         clear: bool,
-    },
-    /// What runs agent sessions here: auto (herdr when it runs), herdr or terminal.
-    Driver {
-        #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::DRIVERS))]
-        driver: String,
     },
     /// Switch this box on: pitupitu uses it again.
     On,
@@ -325,7 +300,6 @@ async fn main() -> Result<()> {
                     let note = if clear { String::new() } else { text.join(" ") };
                     json!({"note": settings::text_or_null(&note)})
                 }
-                BoxCmd::Driver { driver } => json!({"driver": driver}),
                 BoxCmd::On => json!({"enabled": true}),
                 BoxCmd::Off => json!({"enabled": false}),
                 BoxCmd::Agent { name } => json!({"agent": settings::agent_or_null(&name)}),
@@ -403,25 +377,6 @@ async fn main() -> Result<()> {
             settings::print(&settings::get(&cfg).await?, as_json);
             Ok(())
         }
-        Cmd::Terminals => term::holder::run(term::socket_path()).await,
-        Cmd::Hook { pane, event, arg } => {
-            term::client::hook(&pane, &event, arg.as_deref()).await;
-            Ok(())
-        }
-        Cmd::Sessions => sessions(as_json).await,
-        Cmd::Attach { session } => {
-            let target = match session {
-                Some(s) => s,
-                None => {
-                    let list = term_agents().await;
-                    match list.last() {
-                        Some(a) => a.target().to_string(),
-                        None => bail!("no sessions in this box's own terminals"),
-                    }
-                }
-            };
-            term::attach::attach(&target).await
-        }
         Cmd::Skill { action } => {
             match action {
                 SkillCmd::Print => print!("{}", skill::SKILL),
@@ -434,40 +389,6 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-async fn term_agents() -> Vec<herdr::AgentInfo> {
-    use herdr::AgentHost;
-    term::client::TermHost::default()
-        .list_agents()
-        .await
-        .unwrap_or_default()
-}
-
-/// `pitupitu sessions`: the terminal host's agents.
-async fn sessions(as_json: bool) -> Result<()> {
-    let list = term_agents().await;
-    if as_json {
-        println!("{}", serde_json::to_string_pretty(&list)?);
-        return Ok(());
-    }
-    if list.is_empty() {
-        println!("no sessions in this box's own terminals");
-    }
-    for a in list {
-        println!(
-            "{}  {} {} in {}{}",
-            a.target(),
-            a.agent,
-            a.agent_status,
-            a.cwd.display(),
-            a.terminal_title_stripped
-                .as_deref()
-                .map(|t| format!(" — {t}"))
-                .unwrap_or_default()
-        );
-    }
-    Ok(())
 }
 
 /// After a change: the settings as they now are.
@@ -491,20 +412,15 @@ async fn connect(cfg: &Config) -> Result<()> {
         String::new()
     });
     let available = inventory::available().await;
-    let router = Arc::new(router::Router::new(
-        Arc::new(herdr),
-        Arc::new(term::client::TermHost::default()),
-    ));
     let link = link::Link {
         url: cfg.box_url(),
         api_key,
         box_name: cfg.box_name(),
         home,
         herdr_version,
-        host: router.clone(),
+        host: Arc::new(herdr),
         available,
         history: Some(config::home_dir()),
-        router: Some(router),
         ping_timeout: link::PING_TIMEOUT,
         updates: true,
     };
@@ -678,7 +594,6 @@ async fn update_cmd(yes: bool, check: bool, no_restart: bool, as_json: bool) -> 
         println!("installed with Homebrew: run `brew upgrade pitupitu` instead");
         return Ok(());
     }
-    let own = term_agents().await.len();
     let in_herdr = {
         use herdr::AgentHost;
         HerdrCli::new()
@@ -688,13 +603,12 @@ async fn update_cmd(yes: bool, check: bool, no_restart: bool, as_json: bool) -> 
             .unwrap_or(0)
     };
     println!(
-        "running now: {own} session{} in this box's own terminals, {in_herdr} in herdr",
-        if own == 1 { "" } else { "s" }
+        "running now: {in_herdr} session{} in herdr",
+        if in_herdr == 1 { "" } else { "s" }
     );
     println!(
-        "they keep running: herdr is a separate program and the terminals live in their own \
-         process; only the box agent restarts, and its link to pitupitu cloud drops for a few \
-         seconds"
+        "they keep running: herdr is a separate program; only the box agent restarts, and its \
+         link to pitupitu cloud drops for a few seconds"
     );
     if !yes {
         if !std::io::stdin().is_terminal() {
@@ -759,12 +673,6 @@ async fn status(cfg: &Config) -> Result<()> {
     );
     let recent = inventory::recent(&config::home_dir());
     println!("recent project folders: {}", recent.len());
-    let own = term_agents().await;
-    println!(
-        "own terminals: {} session{} (`pitupitu sessions`)",
-        own.len(),
-        if own.len() == 1 { "" } else { "s" }
-    );
     println!("service: {}", service::status());
     match update::newer().await {
         Some(v) => println!(

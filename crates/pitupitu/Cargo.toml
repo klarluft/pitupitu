@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The pitupitu box agent: links this machine's coding agents (in herdr, or in its own terminals) to pitupitu cloud."
+description = "The pitupitu box agent: links this machine's coding agents, running in herdr, to pitupitu cloud."
 
 [dependencies]
 anyhow.workspace = true
@@ -14,7 +14,6 @@ dirs.workspace = true
 futures-util.workspace = true
 herdr = { path = "../herdr", package = "pitupitu-herdr" }
 libc = "0.2"
-portable-pty = "0.9"
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -25,7 +24,6 @@ tokio-tungstenite.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-vt100 = "0.16"
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["ws"] }

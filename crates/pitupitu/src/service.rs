@@ -89,7 +89,7 @@ ExecStart={exec}
 Restart=always
 RestartSec=5
 # Stopping or restarting the service ends the box agent only, not the
-# terminal holder it started: agents running there keep running.
+# herdr server it may have started: agents running there keep running.
 KillMode=process
 Environment={env}
 
@@ -217,8 +217,8 @@ pub fn install(config: &Path) -> Result<Installed> {
 }
 
 /// Restart the service so it runs the binary now at its path. `false`
-/// when no service is installed. Only the box agent restarts: the
-/// terminal holder and herdr are not part of the service.
+/// when no service is installed. Only the box agent restarts: herdr's
+/// server is not part of the service, even when the box started it.
 pub fn restart() -> Result<bool> {
     if cfg!(target_os = "macos") {
         if !launchd_file().exists() {

@@ -66,8 +66,9 @@ pub fn refuse_unsupported(kinds: &[String], kind: &AgentKind) -> Result<()> {
 }
 
 /// What pitupitu cloud can ask of the box, one box link call per method
-/// (see `docs/box-link.md`). herdr is the only implementation today; the
-/// trait exists so another agent host could be added behind the same calls.
+/// (see `docs/box-link.md`). herdr is the only implementation; the trait
+/// is the seam, so tests can stand in for it and another host could be
+/// added behind the same calls.
 #[async_trait]
 pub trait AgentHost: Send + Sync {
     async fn list_workspaces(&self) -> Result<Vec<Workspace>>;
@@ -75,19 +76,15 @@ pub trait AgentHost: Send + Sync {
     /// Open a new workspace for `cwd`, with one fresh shell pane.
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created>;
 
-    /// [`AgentHost::create_workspace`] with the cloud's hint where the
-    /// session should run (`terminal` or `herdr`) and the agent kind it
-    /// means to start there, refused as `unsupported_agent_kind` before
-    /// anything is opened (`docs/sessions.md`, "Kinds"). A host with one
-    /// place to put it ignores the hint.
-    async fn create_workspace_hinted(
+    /// [`AgentHost::create_workspace`] for an agent of `kind`, refused as
+    /// `unsupported_agent_kind` before anything is opened when this host
+    /// cannot start it (`docs/sessions.md`, "Kinds").
+    async fn create_workspace_for(
         &self,
         cwd: &Path,
         label: &str,
-        driver: Option<&str>,
         kind: Option<&AgentKind>,
     ) -> Result<Created> {
-        let _ = driver;
         if let Some(k) = kind {
             refuse_unsupported(&self.kinds().await, k)?;
         }

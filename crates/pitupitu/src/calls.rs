@@ -86,10 +86,6 @@ fn ok<T: Serialize>(value: T) -> Result<Value, CallError> {
 struct CreateWorkspace {
     cwd: PathBuf,
     label: String,
-    /// The cloud's hint where the session should run (`terminal` for
-    /// scratch work); honoured only while the driver setting is `auto`.
-    #[serde(default)]
-    driver: Option<String>,
     /// The agent the cloud means to start there, refused before the
     /// workspace is opened when this box cannot start it.
     #[serde(default)]
@@ -185,7 +181,7 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
                 .map(|k| k.parse::<herdr::AgentKind>().map_err(CallError::bad_call))
                 .transpose()?;
             ok(host
-                .create_workspace_hinted(&a.cwd, &a.label, a.driver.as_deref(), kind.as_ref())
+                .create_workspace_for(&a.cwd, &a.label, kind.as_ref())
                 .await?)
         }
         "create_tab" => {
