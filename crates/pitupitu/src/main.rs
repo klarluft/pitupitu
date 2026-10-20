@@ -8,7 +8,9 @@ use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
-use pitupitu::{config, device, home, inventory, link, service, settings, skill, update};
+use pitupitu::{
+    config, device, herdr_box, home, inventory, link, service, settings, skill, update,
+};
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -407,22 +409,25 @@ async fn connect(cfg: &Config) -> Result<()> {
     };
     let home = cfg.home.clone().unwrap_or_else(config::default_home);
     let herdr = HerdrCli::new();
-    let herdr_version = herdr.version().await.unwrap_or_else(|e| {
-        tracing::warn!("herdr: {e}");
-        String::new()
-    });
+    match herdr_box::status(&herdr).await {
+        Some(s) => tracing::info!(version = %s.version, running = s.running, "herdr"),
+        None => tracing::warn!(
+            "herdr is not installed: pitupitu runs your agents in herdr; `pitupitu setup` installs it"
+        ),
+    }
     let available = inventory::available().await;
     let link = link::Link {
         url: cfg.box_url(),
         api_key,
         box_name: cfg.box_name(),
         home,
-        herdr_version,
-        host: Arc::new(herdr),
+        host: Arc::new(herdr.clone()),
+        keeper: Some(Arc::new(herdr_box::Keeper::new(herdr))),
         available,
         history: Some(config::home_dir()),
         ping_timeout: link::PING_TIMEOUT,
         updates: true,
+        releases: Default::default(),
     };
     tokio::select! {
         r = link.run() => r,

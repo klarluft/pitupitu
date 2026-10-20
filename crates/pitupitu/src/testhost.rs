@@ -125,3 +125,44 @@ impl AgentHost for FakeHost {
         Ok(())
     }
 }
+
+/// A throwaway herdr session for tests that need a live herdr: no server
+/// runs in it at first, and it is stopped and deleted on drop, passed or
+/// not. The person's own session is never touched. `None` when `herdr`
+/// is not on `PATH`, and the test skips.
+pub struct ScratchHerdr {
+    pub cli: herdr::HerdrCli,
+    name: String,
+}
+
+impl ScratchHerdr {
+    pub fn new() -> Option<Self> {
+        if std::process::Command::new("herdr")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipped: herdr is not on PATH");
+            return None;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let name = format!("pitutest-{}-{nanos}", std::process::id());
+        Some(ScratchHerdr {
+            cli: herdr::HerdrCli::with_binary("herdr").with_session(&name),
+            name,
+        })
+    }
+}
+
+impl Drop for ScratchHerdr {
+    fn drop(&mut self) {
+        let herdr = |args: &[&str]| {
+            let _ = std::process::Command::new("herdr").args(args).output();
+        };
+        herdr(&["--session", &self.name, "server", "stop"]);
+        herdr(&["session", "delete", &self.name]);
+    }
+}

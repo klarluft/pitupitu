@@ -16,7 +16,8 @@ pub struct Installed {
     pub logs: String,
 }
 
-fn exe() -> Result<PathBuf> {
+/// The binary the service runs: this one, or its Homebrew `opt` link.
+pub fn exe() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("finding this binary")?;
     Ok(match homebrew_opt(&exe) {
         Some(opt) if opt.exists() => opt,
@@ -216,6 +217,17 @@ pub fn install(config: &Path) -> Result<Installed> {
     }
 }
 
+/// Whether a service for the box agent is installed here.
+pub fn installed() -> bool {
+    if cfg!(target_os = "macos") {
+        launchd_file().exists()
+    } else if cfg!(target_os = "linux") {
+        systemd_file().exists()
+    } else {
+        false
+    }
+}
+
 /// Restart the service so it runs the binary now at its path. `false`
 /// when no service is installed. Only the box agent restarts: herdr's
 /// server is not part of the service, even when the box started it.
@@ -238,6 +250,20 @@ pub fn restart() -> Result<bool> {
     } else {
         Ok(false)
     }
+}
+
+/// [`restart`] without waiting for it, for the box agent restarting
+/// itself from inside the service: the service manager stops this
+/// process and starts the new binary.
+pub fn restart_soon() -> Result<bool> {
+    if cfg!(target_os = "linux") {
+        if !systemd_file().exists() {
+            return Ok(false);
+        }
+        run("systemctl", &["--user", "restart", "--no-block", UNIT])?;
+        return Ok(true);
+    }
+    restart()
 }
 
 pub fn uninstall() -> Result<Option<PathBuf>> {

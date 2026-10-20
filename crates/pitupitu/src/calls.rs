@@ -31,6 +31,15 @@ impl CallError {
         }
     }
 
+    /// Refused by the box itself, with a code the cloud keys on.
+    pub fn api(code: &str, message: impl Into<String>) -> Self {
+        CallError {
+            kind: "api",
+            code: Some(code.to_string()),
+            message: message.into(),
+        }
+    }
+
     pub fn timeout(message: impl Into<String>) -> Self {
         CallError {
             kind: "timeout",

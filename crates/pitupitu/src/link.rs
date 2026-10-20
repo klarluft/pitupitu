@@ -4,23 +4,25 @@
 //! The protocol is in `docs/box-link.md`.
 
 use crate::calls::{self, CallError};
+use crate::herdr_box::{self, HerdrInfo, Keeper};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
+use crate::update::{self, Refused};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use herdr::{AgentHost, AgentInfo};
+use herdr::{AgentHost, AgentInfo, Status};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -32,16 +34,23 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 const STABLE: Duration = Duration::from_secs(30);
 /// How often the recent project folders are looked at again.
 const INVENTORY_EVERY: Duration = Duration::from_secs(300);
-/// How often GitHub is asked for the newest release.
+/// How often GitHub is asked for the newest releases.
 const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// How often `herdr status` is read again (an update made at the
+/// keyboard, a server that now needs a restart).
+const STATUS_EVERY: Duration = Duration::from_secs(60);
+/// The longest an `update` call may take.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct Link {
     pub url: String,
     pub api_key: String,
     pub box_name: String,
     pub home: PathBuf,
-    pub herdr_version: String,
     pub host: Arc<dyn AgentHost>,
+    /// herdr itself: its status, its server, its updates. `None` when a
+    /// test stands in for herdr; the inventory's `herdr` is then null.
+    pub keeper: Option<Arc<Keeper>>,
     /// The agent CLIs found on `PATH` when the agent started.
     pub available: Vec<Available>,
     /// Where the agents keep their session history (the user's home
@@ -49,14 +58,55 @@ pub struct Link {
     pub history: Option<PathBuf>,
     /// Shortened in tests.
     pub ping_timeout: Duration,
-    /// Ask GitHub for the newest release now and then (`latest` in the
-    /// inventory). Off in tests.
+    /// Ask GitHub for the newest releases now and then (`latest` and
+    /// `herdr.latest` in the inventory). Off in tests.
     pub updates: bool,
+    /// The newest releases as last asked, kept across reconnects.
+    pub releases: Arc<Mutex<Releases>>,
 }
 
-/// The inventory as last sent, shared by the poller and the handler of
-/// the cloud's notes.
+/// What GitHub said last, and when.
+#[derive(Debug, Clone, Default)]
+pub struct Releases {
+    /// A newer release of the box agent than this one.
+    pub latest: Option<String>,
+    /// The newest herdr release, whatever is installed.
+    pub herdr: Option<String>,
+    pub asked: Option<Instant>,
+}
+
+impl Releases {
+    async fn ask() -> Releases {
+        let (latest, herdr) = tokio::join!(update::newer(), update::herdr_newest());
+        Releases {
+            latest,
+            herdr,
+            asked: Some(Instant::now()),
+        }
+    }
+
+    fn due(&self) -> bool {
+        self.asked.is_none_or(|t| t.elapsed() >= UPDATE_EVERY)
+    }
+}
+
+/// The inventory as last sent, shared by the poller and the calls that
+/// change it.
 type Shared = Arc<Mutex<Inventory>>;
+
+/// What goes out on the socket, in order.
+enum Out {
+    Frame(Value),
+    /// Everything before this has been sent: restart the service (after
+    /// the box agent updated itself).
+    Restart,
+}
+
+impl From<Value> for Out {
+    fn from(v: Value) -> Self {
+        Out::Frame(v)
+    }
+}
 
 /// Why a link ended.
 #[derive(Debug, PartialEq)]
@@ -85,7 +135,7 @@ impl Link {
                     ),
                     4007 => warn!(
                         %reason,
-                        "pitupitu is out of date: run `curl -fsSL https://pitupitu.chat/install | sh` or `brew upgrade pitupitu`"
+                        "pitupitu is out of date: run `pitupitu update`, `curl -fsSL https://pitupitu.chat/install | sh` or `brew upgrade pitupitu`"
                     ),
                     _ => info!(code, %reason, "box link closed"),
                 },
@@ -118,6 +168,9 @@ impl Link {
             .with_context(|| format!("connecting to {}", self.url))?;
         let (mut sink, mut stream) = ws.split();
 
+        if let Some(k) = &self.keeper {
+            k.ensure(&*self.host).await;
+        }
         let (agents, herdr_up) = match self.host.list_agents().await {
             Ok(a) => (a, true),
             Err(e) => {
@@ -125,15 +178,26 @@ impl Link {
                 (Vec::new(), false)
             }
         };
+        if self.updates && self.releases.lock().unwrap().due() {
+            let asked = Releases::ask().await;
+            *self.releases.lock().unwrap() = asked;
+        }
+        let releases = self.releases.lock().unwrap().clone();
+        let status = match &self.keeper {
+            Some(k) => herdr_box::status(k.cli()).await,
+            None => None,
+        };
         let inv = Inventory {
-            driver: "herdr".into(),
-            herdr: if herdr_up {
-                self.herdr_version.clone()
+            install: update::install_kind(),
+            latest: releases.latest.clone(),
+            herdr: status
+                .as_ref()
+                .map(|s| HerdrInfo::new(s, herdr_up, releases.herdr.as_deref())),
+            kinds: if herdr_up {
+                self.host.kinds().await
             } else {
-                String::new()
+                Vec::new()
             },
-            kinds: self.host.kinds().await,
-            latest: None,
             available: self.available.clone(),
             recent: self.recent().await,
         };
@@ -155,16 +219,21 @@ impl Link {
             .await?;
         info!(url = %self.url, "box link up");
 
-        let (tx, mut rx) = mpsc::channel::<Value>(64);
+        let (tx, mut rx) = mpsc::channel::<Out>(64);
+        let refresh = Arc::new(Notify::new());
         let poller = tokio::spawn(poll(
             Polled {
                 host: self.host.clone(),
+                keeper: self.keeper.clone(),
                 home_dir: self.home.clone(),
                 history: self.history.clone(),
-                herdr_version: self.herdr_version.clone(),
                 inventory: shared.clone(),
                 updates: self.updates,
+                releases: self.releases.clone(),
+                status,
+                refresh: refresh.clone(),
             },
+            herdr_up,
             signature(&agents),
             files,
             tx.clone(),
@@ -181,7 +250,7 @@ impl Link {
                         Some(m) => m.context("reading from the cloud")?,
                     };
                     match msg {
-                        Message::Text(t) => self.incoming(t.as_str(), &tx),
+                        Message::Text(t) => self.incoming(t.as_str(), &tx, &refresh),
                         // Pong answers are queued by the library and flushed
                         // on the next read or write.
                         Message::Ping(_) => last_ping = Instant::now(),
@@ -198,7 +267,21 @@ impl Link {
                         _ => {}
                     }
                 }
-                Some(out) = rx.recv() => sink.send(text(&out)).await?,
+                Some(out) = rx.recv() => match out {
+                    // `send` flushes: the frame is on the wire when it returns.
+                    Out::Frame(v) => sink.send(text(&v)).await?,
+                    Out::Restart => {
+                        info!("box agent updated; restarting the service");
+                        match tokio::task::spawn_blocking(crate::service::restart_soon).await {
+                            Ok(Ok(true)) => {}
+                            Ok(Ok(false)) => {
+                                warn!("updated, but no service runs this box agent; restart `pitupitu connect` to run the new version")
+                            }
+                            Ok(Err(e)) => warn!("restarting the service: {e:#}"),
+                            Err(e) => warn!("restarting the service: {e}"),
+                        }
+                    }
+                },
                 _ = liveness.tick() => {
                     if last_ping.elapsed() > self.ping_timeout {
                         return Err(anyhow!("no ping from the cloud in {:?}", self.ping_timeout));
@@ -211,7 +294,7 @@ impl Link {
     /// A frame from the cloud: a call is run on its own task, the reply
     /// goes back through `tx`. Only the call's name is logged, never its
     /// arguments or result.
-    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Value>) {
+    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Out>, refresh: &Arc<Notify>) {
         let Ok(value) = serde_json::from_str::<Value>(frame) else {
             warn!("unreadable frame from the cloud");
             return;
@@ -232,6 +315,13 @@ impl Link {
             .unwrap_or_default()
             .to_string();
         let args = value.get("args").cloned().unwrap_or(Value::Null);
+        if call == "update" {
+            let keeper = self.keeper.clone();
+            let tx = tx.clone();
+            let refresh = refresh.clone();
+            tokio::spawn(async move { update_call(id, args, keeper, tx, refresh).await });
+            return;
+        }
         let host = self.host.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
@@ -252,8 +342,71 @@ impl Link {
                     json!({"id": id, "err": err})
                 }
             };
-            let _ = tx.send(reply).await;
+            let _ = tx.send(reply.into()).await;
         });
+    }
+}
+
+/// The `update` call: the box agent or herdr, the way each was installed.
+/// For the box agent the reply goes out first, then the service restarts
+/// and the next `hello` carries the new version. For herdr the inventory
+/// is read again at once.
+async fn update_call(
+    id: Value,
+    args: Value,
+    keeper: Option<Arc<Keeper>>,
+    tx: mpsc::Sender<Out>,
+    refresh: Arc<Notify>,
+) {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        what: String,
+        #[serde(default)]
+        handoff: bool,
+    }
+    let result = match serde_json::from_value::<Args>(args) {
+        Err(e) => Err(CallError::bad_call(format!("update: {e}"))),
+        Ok(a) => {
+            let run = async {
+                match a.what.as_str() {
+                    "box" => update::update_box().await,
+                    "herdr" => match &keeper {
+                        Some(k) => herdr_box::update(k.cli(), a.handoff).await,
+                        None => Err(Refused::Unavailable("herdr is not driven here".into())),
+                    },
+                    other => Err(Refused::Unavailable(format!(
+                        "`{other}` is not something this box updates (box or herdr)"
+                    ))),
+                }
+            };
+            match tokio::time::timeout(UPDATE_TIMEOUT, run).await {
+                Err(_) => Err(CallError::timeout(format!(
+                    "update took over {UPDATE_TIMEOUT:?}"
+                ))),
+                Ok(Ok(done)) => Ok(done),
+                Ok(Err(r)) => Err(CallError::api(r.code(), r.message())),
+            }
+        }
+    };
+    let reply = match &result {
+        Ok(done) => {
+            info!(what = done.what, from = %done.from, to = %done.to, restart = done.restart, "updated");
+            json!({"id": id, "ok": done})
+        }
+        Err(err) => {
+            info!(call = "update", kind = err.kind, code = ?err.code, "call failed");
+            json!({"id": id, "err": err})
+        }
+    };
+    if tx.send(reply.into()).await.is_err() {
+        return;
+    }
+    match result {
+        Ok(done) if done.what == "box" && done.restart == "done" => {
+            let _ = tx.send(Out::Restart).await;
+        }
+        Ok(_) => refresh.notify_one(),
+        Err(_) => {}
     }
 }
 
@@ -309,20 +462,21 @@ fn signature(agents: &[AgentInfo]) -> Signature {
 /// What the poller looks at.
 struct Polled {
     host: Arc<dyn AgentHost>,
+    keeper: Option<Arc<Keeper>>,
     home_dir: PathBuf,
     history: Option<PathBuf>,
     updates: bool,
-    herdr_version: String,
     inventory: Shared,
+    releases: Arc<Mutex<Releases>>,
+    /// `herdr status` as last read.
+    status: Option<Status>,
+    /// Read herdr's status again now (after an update).
+    refresh: Arc<Notify>,
 }
 
 impl Polled {
     /// Send an `inventory` note if `change` alters what was last sent.
-    async fn inventory(
-        &self,
-        tx: &mpsc::Sender<Value>,
-        change: impl FnOnce(&mut Inventory),
-    ) -> bool {
+    async fn inventory(&self, tx: &mpsc::Sender<Out>, change: impl FnOnce(&mut Inventory)) -> bool {
         let note = {
             let mut inv = self.inventory.lock().unwrap();
             let before = inv.clone();
@@ -330,20 +484,44 @@ impl Polled {
             (*inv != before).then(|| inventory_note(&inv))
         };
         match note {
-            Some(n) => tx.send(n).await.is_ok(),
+            Some(n) => tx.send(n.into()).await.is_ok(),
             None => true,
         }
+    }
+
+    async fn read_status(&mut self) {
+        if let Some(k) = &self.keeper {
+            self.status = herdr_box::status(k.cli()).await;
+        }
+    }
+
+    /// The inventory's herdr half from what is known now.
+    async fn herdr_part(&self, up: bool) -> (Option<HerdrInfo>, Vec<String>) {
+        let newest = self.releases.lock().unwrap().herdr.clone();
+        let info = self
+            .status
+            .as_ref()
+            .map(|s| HerdrInfo::new(s, up, newest.as_deref()));
+        let kinds = if up {
+            self.host.kinds().await
+        } else {
+            Vec::new()
+        };
+        (info, kinds)
     }
 }
 
 /// Once a second: send `agents` when herdr's list changed, `home` when the
-/// pitupitu files did, `inventory` when herdr comes or goes; every five
-/// minutes, `inventory` when the recent folders changed.
+/// pitupitu files did, `inventory` when herdr starts or stops answering
+/// (starting its server when it does not); every minute, `inventory` when
+/// herdr's status changed; every five minutes when the recent folders
+/// did; every six hours when a newer release appeared.
 async fn poll(
-    p: Polled,
+    mut p: Polled,
+    mut up: bool,
     mut last_agents: Signature,
     mut last_files: Vec<home::HomeFile>,
-    tx: mpsc::Sender<Value>,
+    tx: mpsc::Sender<Out>,
 ) {
     let host = p.host.clone();
     let home_dir = p.home_dir.clone();
@@ -351,15 +529,22 @@ async fn poll(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut recent_tick = tokio::time::interval(INVENTORY_EVERY);
     recent_tick.tick().await;
-    // The first tick comes at once: the newest release is known early.
+    let mut status_tick = tokio::time::interval(STATUS_EVERY);
+    status_tick.tick().await;
+    // Asked when the link came up; next in six hours.
     let mut update_tick = tokio::time::interval(UPDATE_EVERY);
-    let mut herdr_down = p.inventory.lock().unwrap().herdr.is_empty();
+    update_tick.tick().await;
+    let refresh = p.refresh.clone();
     loop {
+        let mut herdr_changed = false;
         tokio::select! {
             _ = tick.tick() => {}
             _ = update_tick.tick(), if p.updates => {
-                let latest = crate::update::newer().await;
-                if !p.inventory(&tx, |i| i.latest = latest).await {
+                let asked = Releases::ask().await;
+                let latest = asked.latest.clone();
+                *p.releases.lock().unwrap() = asked;
+                let (herdr, _) = p.herdr_part(up).await;
+                if !p.inventory(&tx, |i| { i.latest = latest; i.herdr = herdr; }).await {
                     return;
                 }
                 continue;
@@ -375,24 +560,38 @@ async fn poll(
                 }
                 continue;
             }
+            _ = status_tick.tick() => herdr_changed = true,
+            _ = refresh.notified() => herdr_changed = true,
         }
         let listed = host.list_agents().await;
-        let herdr_ok = listed.is_ok();
-        if herdr_ok == herdr_down {
-            herdr_down = !herdr_ok;
-            if herdr_ok {
+        let now_up = listed.is_ok();
+        if let (Err(e), Some(k)) = (&listed, &p.keeper) {
+            k.revive(e).await;
+        }
+        if now_up != up {
+            up = now_up;
+            herdr_changed = true;
+            if up {
                 info!("herdr answers");
+                if let Some(k) = &p.keeper {
+                    k.answered();
+                }
             } else {
                 warn!("herdr does not answer");
             }
         }
-        let version = if herdr_ok {
-            p.herdr_version.clone()
-        } else {
-            String::new()
-        };
-        if !p.inventory(&tx, |i| i.herdr = version).await {
-            return;
+        if herdr_changed {
+            p.read_status().await;
+            let (herdr, kinds) = p.herdr_part(up).await;
+            if !p
+                .inventory(&tx, |i| {
+                    i.herdr = herdr;
+                    i.kinds = kinds;
+                })
+                .await
+            {
+                return;
+            }
         }
         match listed {
             Ok(agents) => {
@@ -400,7 +599,7 @@ async fn poll(
                 if sig != last_agents {
                     last_agents = sig;
                     if tx
-                        .send(json!({"note": "agents", "agents": agents}))
+                        .send(json!({"note": "agents", "agents": agents}).into())
                         .await
                         .is_err()
                     {
@@ -417,7 +616,7 @@ async fn poll(
         if files != last_files {
             last_files = files.clone();
             if tx
-                .send(json!({"note": "home", "files": files}))
+                .send(json!({"note": "home", "files": files}).into())
                 .await
                 .is_err()
             {
@@ -473,8 +672,8 @@ mod tests {
             api_key: "ptp_test".into(),
             box_name: "testbox".into(),
             home,
-            herdr_version: "herdr 0.9.3".into(),
             host: Arc::new(host),
+            keeper: None,
             available: vec![Available {
                 kind: "claude".into(),
                 version: "2.3.1 (Claude Code)".into(),
@@ -482,6 +681,7 @@ mod tests {
             history: None,
             ping_timeout: PING_TIMEOUT,
             updates: false,
+            releases: Default::default(),
         }
     }
 
@@ -501,10 +701,13 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 2);
+        assert_eq!(hello["protocol"], 3);
         assert_eq!(hello["box"], "testbox");
-        assert_eq!(hello["herdr"], "herdr 0.9.3");
-        assert_eq!(hello["driver"], "herdr");
+        assert_eq!(hello["herdr"], Value::Null);
+        assert!(hello.get("driver").is_none());
+        assert_eq!(hello["install"], "installer");
+        assert_eq!(hello["latest"], Value::Null);
+        assert_eq!(hello["kinds"], json!(["claude", "codex"]));
         assert_eq!(hello["available"][0]["kind"], "claude");
         assert_eq!(hello["recent"], json!([]));
         assert_eq!(hello["agents"][0]["name"], "notes");
@@ -552,6 +755,57 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(session.await.unwrap().unwrap(), End::Replaced);
+    }
+
+    #[tokio::test]
+    async fn updates_are_refused_with_the_calls_codes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, server) = cloud().await;
+        let l = link(url, FakeHost::default(), dir.path().to_path_buf());
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+        next_json(&mut ws).await; // hello
+        next_json(&mut ws).await; // home
+        for frame in [
+            json!({"id": 1, "call": "update", "args": {"what": "toaster"}}),
+            json!({"id": 2, "call": "update", "args": {"what": "herdr"}}),
+            json!({"id": 3, "call": "update", "args": {}}),
+        ] {
+            ws.send(text(&frame)).await.unwrap();
+        }
+        let mut replies = Vec::new();
+        for _ in 0..3 {
+            replies.push(next_json(&mut ws).await);
+        }
+        let by_id = |id: u64| replies.iter().find(|r| r["id"] == id).unwrap().clone();
+        assert_eq!(by_id(1)["err"]["code"], "update_unavailable");
+        // No herdr behind this link: nothing to update it with.
+        assert_eq!(by_id(2)["err"]["code"], "update_unavailable");
+        assert_eq!(by_id(3)["err"]["kind"], "bad_call");
+        session.abort();
+    }
+
+    /// A live herdr in a throwaway session: none runs there, so the box
+    /// starts the server before `hello`, which says so.
+    #[tokio::test]
+    async fn the_box_starts_herdrs_server_and_reports_it() {
+        let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (url, server) = cloud().await;
+        let mut l = link(url, FakeHost::default(), dir.path().to_path_buf());
+        l.host = Arc::new(scratch.cli.clone());
+        l.keeper = Some(Arc::new(Keeper::new(scratch.cli.clone())));
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+        let hello = next_json(&mut ws).await;
+        assert_eq!(hello["herdr"]["running"], true, "{hello}");
+        assert!(hello["herdr"]["version"].as_str().unwrap().contains('.'));
+        assert!(hello["herdr"]["protocol"].is_u64(), "{hello}");
+        let kinds = hello["kinds"].as_array().unwrap();
+        assert!(kinds.iter().any(|k| k == "claude"), "{hello}");
+        session.abort();
     }
 
     #[tokio::test]
