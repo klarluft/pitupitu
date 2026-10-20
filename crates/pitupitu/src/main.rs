@@ -40,29 +40,29 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Sign this box in, create the home folder, install herdr when it is
-    /// missing, install the user service.
+    /// Sign this machine in, make pitupitu's folder, install herdr if it is
+    /// missing, and have pitupitu start by itself (a user service).
     Setup {
-        /// The home folder (default: ~/pitupitu, or the one set before).
+        /// pitupitu's own folder (default: ~/pitupitu, or the one set before).
         #[arg(long)]
         home: Option<String>,
-        /// Sign in again even if this box already has a working key.
+        /// Sign in again even if this machine is already signed in.
         #[arg(long)]
         relink: bool,
-        /// How this box is named on the dashboard (default: hostname).
+        /// What this machine is called in pitupitu (default: its hostname).
         #[arg(long = "box")]
         box_name: Option<String>,
-        /// Do not install or restart the user service.
+        /// Do not make pitupitu start by itself (no user service).
         #[arg(long)]
         no_service: bool,
-        /// Only print the sign-in URL; do not try to open a browser.
+        /// Only print the sign-in link; do not try to open a browser.
         #[arg(long)]
         no_browser: bool,
-        /// Linux: keep the service (and herdr) running when nobody is
-        /// logged in (`loginctl enable-linger`), without asking.
+        /// Linux: keep pitupitu running while you are logged out, without
+        /// asking (`loginctl enable-linger`).
         #[arg(long, conflicts_with = "no_linger")]
         linger: bool,
-        /// Linux: do not offer lingering.
+        /// Linux: do not ask about running while you are logged out.
         #[arg(long)]
         no_linger: bool,
     },
@@ -499,14 +499,36 @@ fn ask(question: &str, default: &str) -> String {
         return default.to_string();
     }
     eprint!("  {question} [{default}]: ");
-    let _ = std::io::stderr().flush();
-    let mut line = String::new();
-    let _ = std::io::stdin().lock().read_line(&mut line);
-    let line = line.trim();
+    let line = read_answer();
     if line.is_empty() {
         default.to_string()
     } else {
-        line.to_string()
+        line
+    }
+}
+
+/// A yes/no question, `[Y/n]` or `[y/N]`: Enter gives the default.
+/// Without a terminal it is the default too.
+fn ask_yes(question: &str, default: bool) -> bool {
+    if !std::io::stdin().is_terminal() {
+        return default;
+    }
+    eprint!("  {question} [{}] ", if default { "Y/n" } else { "y/N" });
+    yes(&read_answer(), default)
+}
+
+fn read_answer() -> String {
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    line.trim().to_string()
+}
+
+/// An answer to [`ask_yes`]: empty is the default, else whether it starts with y.
+fn yes(answer: &str, default: bool) -> bool {
+    match answer.trim() {
+        "" => default,
+        a => a.to_lowercase().starts_with('y'),
     }
 }
 
@@ -527,14 +549,14 @@ async fn setup(
         match device::me(&cfg.cloud_url, key).await {
             Ok(me) => linked = Some(me),
             Err(device::MeError::Rejected) => {
-                eprintln!("  this box's key no longer works; signing in again")
+                eprintln!("  this machine's sign-in no longer works; signing in again")
             }
             Err(e) => bail!("{e}"),
         }
     }
     match linked {
         Some(me) => eprintln!(
-            "  already signed in as {} (box \"{}\")",
+            "  already signed in as {}; this machine is called \"{}\"",
             me.email, me.box_name
         ),
         None => {
@@ -550,7 +572,7 @@ async fn setup(
             config::set(path, &entries)?;
             eprintln!();
             eprintln!(
-                "  signed in as {}; this box is \"{}\" on the dashboard",
+                "  signed in as {}; this machine is called \"{}\"",
                 issued.email, issued.box_name
             );
         }
@@ -560,33 +582,48 @@ async fn setup(
     let current = cfg.home.clone().unwrap_or_else(config::default_home);
     let home = match home {
         Some(h) => config::expand(h),
-        None => config::expand(&ask(
-            "home folder for pitupitu",
-            &current.display().to_string(),
-        )),
+        None => {
+            if std::io::stdin().is_terminal() {
+                eprintln!();
+                eprintln!(
+                    "  pitupitu keeps its own files in one folder, and quick jobs that belong \
+                     to no project run there"
+                );
+            }
+            config::expand(&ask(
+                "Folder (press Enter to use this one)",
+                &current.display().to_string(),
+            ))
+        }
     };
     for created in home::ensure(&home)? {
-        eprintln!("  created {created}");
+        eprintln!("  made the folder {created}");
     }
     config::set(path, &[("home", "path", &home.display().to_string())])?;
-    eprintln!("  home folder: {}", home.display());
+    eprintln!("  pitupitu's folder: {}", home.display());
 
     // 3. The skill, offered once to a person at a terminal.
     let skill_file = config::home_dir().join(".claude/skills/pitupitu/SKILL.md");
     if !skill_file.exists() {
         if std::io::stdin().is_terminal() {
-            let yes = ask(
-                "teach Claude Code and Codex how to configure pitupitu (installs a skill)? y/n",
-                "y",
-            );
-            if yes.to_lowercase().starts_with('y') {
-                for f in skill::install(&config::home_dir())? {
-                    eprintln!("  wrote {}", f.display());
-                }
+            eprintln!();
+            if ask_yes(
+                "Let Claude Code and Codex change pitupitu's settings for you? (installs a skill)",
+                true,
+            ) {
+                let files: Vec<_> = skill::install(&config::home_dir())?
+                    .iter()
+                    .map(|f| f.display().to_string())
+                    .collect();
+                eprintln!(
+                    "  ok, Claude Code and Codex know how now (wrote {})",
+                    files.join(", ")
+                );
             }
         } else {
             eprintln!(
-                "  `pitupitu skill install` teaches Claude Code and Codex to configure pitupitu"
+                "  to let Claude Code and Codex change pitupitu's settings for you, run: \
+                 pitupitu skill install"
             );
         }
     }
@@ -598,21 +635,21 @@ async fn setup(
     if !no_service {
         offer_linger(path, linger)?;
     }
+    eprintln!();
     if no_service {
-        eprintln!();
-        eprintln!("  run `pitupitu connect` to link this box");
+        eprintln!("  to connect this machine, run: pitupitu connect (and keep it open)");
     } else {
         let installed = service::install(path)?;
         eprintln!(
-            "  service installed and running: {}",
-            installed.file.display()
+            "  pitupitu is running now and starts by itself when you log in ({})",
+            installed.kind
         );
-        eprintln!("  logs: {}", installed.logs);
+        eprintln!("  to read its log: {}", installed.logs);
     }
     // Another cloud (a local gateway) has its own site, which the box does not know.
     if cfg.cloud_url == config::DEFAULT_CLOUD_URL {
         eprintln!();
-        eprintln!("  now open https://pitupitu.chat/app");
+        eprintln!("  all set; now open https://pitupitu.chat/app on your phone or any browser");
     }
     Ok(())
 }
@@ -623,41 +660,47 @@ async fn setup(
 /// server restarts. Failures are said and setup goes on; the next setup
 /// tries again.
 async fn setup_herdr() {
+    eprintln!();
     let bin = match herdr_box::find_binary() {
         Some(b) => b,
         None => {
-            eprintln!("  pitupitu runs your agents in herdr; installing it");
+            eprintln!(
+                "  pitupitu runs your coding agents inside herdr, a small program that keeps \
+                 them running; installing it"
+            );
             match herdr_box::install() {
                 Ok(b) => {
-                    eprintln!("  herdr installed: {}", b.display());
+                    eprintln!("  herdr is installed ({})", b.display());
                     b
                 }
                 Err(e) => {
-                    eprintln!(
-                        "  could not install herdr ({e:#}); install it from https://herdr.dev, \
-                         then run `pitupitu setup` again"
-                    );
+                    eprintln!("  herdr could not be installed ({e:#})");
+                    eprintln!("  install it from https://herdr.dev, then run pitupitu setup again");
                     return;
                 }
             }
         }
     };
     let cli = HerdrCli::with_binary(bin.display().to_string());
-    for kind in ["claude", "codex"] {
+    for (kind, name) in [("claude", "Claude Code"), ("codex", "Codex")] {
         if herdr_box::on_path(kind).is_none() {
             continue;
         }
         match cli.integration_install(kind).await {
-            Ok(_) => eprintln!("  herdr integration for {kind}: installed"),
-            Err(e) => eprintln!("  herdr integration for {kind}: {e}"),
+            Ok(_) => eprintln!(
+                "  {name} sessions will come back after a restart (herdr integration installed)"
+            ),
+            Err(e) => eprintln!(
+                "  {name} sessions may not come back after a restart (herdr integration: {e})"
+            ),
         }
     }
-    eprintln!("  open `herdr` on this machine to see the sessions your phone sees");
+    eprintln!("  to watch your agents on this machine as your phone sees them, run: herdr");
 }
 
-/// On Linux, user services stop at logout: offered once, `--linger` or
-/// `--no-linger` decide for a script, and without a terminal it is only
-/// mentioned.
+/// On Linux, user services stop at logout unless lingering is on:
+/// asked once (yes by default), `--linger` or `--no-linger` decide for a
+/// script, and without a terminal it is only mentioned.
 fn offer_linger(path: &std::path::Path, choice: Option<bool>) -> Result<()> {
     let Some(user) = service::linger_off() else {
         return Ok(());
@@ -666,25 +709,36 @@ fn offer_linger(path: &std::path::Path, choice: Option<bool>) -> Result<()> {
         Some(c) => c,
         None if config::get(path, "setup", "linger_offered").is_some() => return Ok(()),
         None if !std::io::stdin().is_terminal() => {
+            eprintln!();
             eprintln!(
-                "  to keep pitupitu and herdr running with nobody logged in: loginctl enable-linger {user}"
+                "  to keep pitupitu working while you are logged out, run: loginctl enable-linger {user}"
             );
             return Ok(());
         }
         None => {
+            eprintln!();
             eprintln!(
-                "  lingering keeps pitupitu and herdr running when nobody is logged in here, \
-                 and starts them after a reboot"
+                "  pitupitu can keep working on this machine while you are logged out, so your \
+                 phone still reaches it, and it starts again by itself after a restart"
             );
-            let answer = ask("turn it on (loginctl enable-linger)? y/n", "n");
+            let answer = ask_yes("Keep it running while you are logged out?", true);
             config::set(path, &[("setup", "linger_offered", "yes")])?;
-            answer.to_lowercase().starts_with('y')
+            if !answer {
+                eprintln!(
+                    "  ok, it runs only while you are logged in (to change that later: \
+                     loginctl enable-linger {user})"
+                );
+            }
+            answer
         }
     };
     if yes {
         match service::enable_linger(&user) {
-            Ok(()) => eprintln!("  lingering on for {user}"),
-            Err(e) => eprintln!("  could not turn lingering on: {e:#}"),
+            Ok(()) => eprintln!("  ok, it keeps running while you are logged out"),
+            Err(e) => eprintln!(
+                "  could not turn that on ({e:#}); you can do it later with: \
+                 loginctl enable-linger {user}"
+            ),
         }
     }
     Ok(())
@@ -1024,4 +1078,20 @@ async fn status(cfg: &Config) -> Result<()> {
         None => println!("version: {}", update::current()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::yes;
+
+    #[test]
+    fn enter_gives_the_default_and_y_or_n_decide() {
+        assert!(yes("", true));
+        assert!(!yes("", false));
+        assert!(yes("  ", true));
+        assert!(yes("Y", false));
+        assert!(yes("yes", false));
+        assert!(!yes("n", true));
+        assert!(!yes("No", true));
+    }
 }

@@ -12,6 +12,8 @@ const LABEL: &str = "chat.pitupitu.box";
 
 pub struct Installed {
     pub file: PathBuf,
+    /// What it is, for those who know the word.
+    pub kind: &'static str,
     /// How to read its logs.
     pub logs: String,
 }
@@ -211,6 +213,7 @@ pub fn install(config: &Path) -> Result<Installed> {
         )?;
         Ok(Installed {
             file,
+            kind: "launchd agent",
             logs: format!("tail -f {}", log.display()),
         })
     } else if cfg!(target_os = "linux") {
@@ -221,10 +224,13 @@ pub fn install(config: &Path) -> Result<Installed> {
         run("systemctl", &["--user", "restart", UNIT])?;
         Ok(Installed {
             file,
+            kind: "systemd user service",
             logs: "journalctl --user -u pitupitu -f".into(),
         })
     } else {
-        bail!("no user service support on this system; run `pitupitu connect` yourself")
+        bail!(
+            "pitupitu cannot start by itself on this system; run pitupitu connect and keep it open"
+        )
     }
 }
 
