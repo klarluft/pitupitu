@@ -11,19 +11,19 @@ dir="${PITUPITU_INSTALL_DIR:-$HOME/.local/bin}"
 case "$(uname -s)" in
   Linux) os="unknown-linux-musl" ;;
   Darwin) os="apple-darwin" ;;
-  *) echo "pitupitu: unsupported system $(uname -s)" >&2; exit 1 ;;
+  *) echo "pitupitu does not run on this system yet ($(uname -s))" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch="x86_64" ;;
   arm64 | aarch64) arch="aarch64" ;;
-  *) echo "pitupitu: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+  *) echo "pitupitu does not run on this kind of processor yet ($(uname -m))" >&2; exit 1 ;;
 esac
 name="pitupitu-$arch-$os"
 url="https://github.com/$repo/releases/latest/download/$name.tar.gz"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-echo "downloading $url"
+echo "downloading pitupitu ($url)"
 curl -fsSL "$url" -o "$tmp/$name.tar.gz"
 curl -fsSL "$url.sha256" -o "$tmp/$name.tar.gz.sha256"
 (
@@ -37,22 +37,22 @@ curl -fsSL "$url.sha256" -o "$tmp/$name.tar.gz.sha256"
 tar xzf "$tmp/$name.tar.gz" -C "$tmp"
 mkdir -p "$dir"
 install -m 755 "$tmp/$name/pitupitu" "$dir/pitupitu"
-echo "installed $dir/pitupitu"
+echo "pitupitu is installed ($dir/pitupitu)"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
-  *) echo "add $dir to your PATH to run pitupitu from a shell" ;;
+  *) echo "your terminal does not find pitupitu by its name yet (add $dir to your PATH)" ;;
 esac
 # pitupitu runs the agents in herdr: installed with herdr's own installer
 # when it is missing. A failure is said, not fatal; setup tries again.
 herdr_dir="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
 if ! command -v herdr >/dev/null 2>&1 && [ ! -x "$herdr_dir/herdr" ]; then
-  echo "pitupitu runs your agents in herdr; installing it"
+  echo "pitupitu runs your coding agents inside herdr, a small program that keeps them running; installing it"
   if curl -fsSL https://herdr.dev/install.sh -o "$tmp/herdr-install.sh" &&
     sh "$tmp/herdr-install.sh"; then
     :
   else
-    echo "could not install herdr; pitupitu setup will try again (or see https://herdr.dev)" >&2
+    echo "herdr could not be installed; pitupitu setup tries again (or see https://herdr.dev)" >&2
   fi
 fi
 
@@ -61,5 +61,5 @@ fi
 if (exec </dev/tty) 2>/dev/null; then
   "$dir/pitupitu" setup </dev/tty
 else
-  echo "next: pitupitu setup"
+  echo "to finish, run: pitupitu setup"
 fi

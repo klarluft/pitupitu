@@ -81,7 +81,7 @@ pub async fn login(url: &str, box_name: &str, open_browser: bool) -> Result<Issu
     eprintln!();
     eprintln!("  {}", code.verification_url_complete);
     eprintln!();
-    eprintln!("  waiting for you (ctrl-c to give up) …");
+    eprintln!("  waiting for you to approve it (press ctrl-c to stop) …");
     if open_browser {
         try_open(&code.verification_url_complete);
     }
@@ -110,7 +110,9 @@ pub async fn login(url: &str, box_name: &str, open_browser: bool) -> Result<Issu
         match error.as_str() {
             "authorization_pending" => {}
             "slow_down" => interval += Duration::from_secs(1),
-            "access_denied" => bail!("this box was denied on the dashboard"),
+            "access_denied" => {
+                bail!("this machine was not approved; run `pitupitu setup` to try again")
+            }
             "expired_token" => {
                 bail!("the code expired before it was approved; run `pitupitu setup` again")
             }
