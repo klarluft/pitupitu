@@ -457,13 +457,17 @@ async fn connect(cfg: &Config) -> Result<()> {
         ),
     }
     let available = inventory::available().await;
+    // herdr's server is up before the cloud is reached, so the person
+    // opening `herdr` at the desk finds the same one.
+    let keeper = Arc::new(herdr_box::Keeper::new(herdr.clone()));
+    keeper.ensure(&herdr).await;
     let link = link::Link {
         url: cfg.box_url(),
         api_key,
         box_name: cfg.box_name(),
         home,
         host: Arc::new(herdr.clone()),
-        keeper: Some(Arc::new(herdr_box::Keeper::new(herdr))),
+        keeper: Some(keeper),
         available,
         history: Some(config::home_dir()),
         ping_timeout: link::PING_TIMEOUT,
