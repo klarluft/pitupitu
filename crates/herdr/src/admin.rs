@@ -27,9 +27,25 @@ pub struct Status {
     pub binary: Option<PathBuf>,
     /// Whether a server answers on the session's socket.
     pub running: bool,
+    /// The running server's version, when one runs and herdr says.
+    pub server_version: Option<String>,
     /// The running server is older than the binary (after an update): it
-    /// keeps working, new server-side features wait for a restart.
+    /// keeps working, new server-side features wait for a restart. herdr
+    /// says so as `restart_needed` or `server_binary_stale`; a server on
+    /// another version than the binary counts too.
     pub restart_needed: bool,
+}
+
+impl Status {
+    /// Fills in `restart_needed` from what herdr says about the server.
+    fn with_stale_server(mut self, stale: bool) -> Self {
+        let other_version = self
+            .server_version
+            .as_deref()
+            .is_some_and(|v| !v.is_empty() && v != self.version);
+        self.restart_needed |= stale || (self.running && other_version);
+        self
+    }
 }
 
 impl HerdrCli {
@@ -137,23 +153,32 @@ fn parse_status_json(text: &str) -> Option<Status> {
             .and_then(Value::as_bool)
             .unwrap_or(false)
     };
-    Some(Status {
+    let running = flag(server, "running")
+        || server.and_then(|s| s.get("status")).and_then(Value::as_str) == Some("running");
+    let status = Status {
         version: client.get("version")?.as_str()?.to_string(),
         protocol: client.get("protocol").and_then(Value::as_u64),
         binary: client
             .get("binary")
             .and_then(Value::as_str)
             .map(PathBuf::from),
-        running: flag(server, "running"),
+        running,
+        server_version: server
+            .and_then(|s| s.get("version"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         restart_needed: flag(v.get("update"), "restart_needed") || flag(server, "restart_needed"),
-    })
+    };
+    let stale = flag(v.get("update"), "server_binary_stale") || flag(server, "server_binary_stale");
+    Some(status.with_stale_server(stale))
 }
 
 /// The text form, sections of `key: value` lines:
-/// `client:` (`version`, `protocol`), `server:` (`status: running`),
-/// `update:` (`restart_needed: yes`).
+/// `client:` (`version`, `protocol`), `server:` (`status: running`,
+/// `version`), `update:` (`restart_needed: yes`, `server_binary_stale: yes`).
 fn parse_status_text(text: &str) -> Option<Status> {
     let mut s = Status::default();
+    let mut stale = false;
     let mut section = "";
     for line in text.lines() {
         let indented = line.starts_with(' ') || line.starts_with('\t');
@@ -170,11 +195,13 @@ fn parse_status_text(text: &str) -> Option<Status> {
             ("client", "protocol") => s.protocol = value.parse().ok(),
             ("client", "binary") => s.binary = Some(PathBuf::from(value)),
             ("server", "status") => s.running = value == "running",
+            ("server", "version") => s.server_version = Some(value.to_string()),
             ("update", "restart_needed") => s.restart_needed = value == "yes",
+            ("update", "server_binary_stale") => stale = value == "yes",
             _ => {}
         }
     }
-    (!s.version.is_empty()).then_some(s)
+    (!s.version.is_empty()).then(|| s.with_stale_server(stale))
 }
 
 #[cfg(test)]
@@ -207,6 +234,28 @@ mod tests {
         let s = parse_status_text(stopped).unwrap();
         assert!(!s.running && s.restart_needed);
         assert!(parse_status_text("nothing here").is_none());
+    }
+
+    #[test]
+    fn a_server_left_on_an_older_binary_waits_for_a_restart() {
+        // herdr 0.9.5 with the 0.9.0 server still running: it says
+        // `server_binary_stale` and leaves `restart_needed` false.
+        let json = r#"{"client":{"version":"0.9.5","protocol":22,"binary":"/Users/me/.local/bin/herdr"},
+            "server":{"status":"running","running":true,"version":"0.9.0","protocol":22,"restart_needed":false,"server_binary_stale":true},
+            "update":{"restart_needed":false,"server_binary_stale":true}}"#;
+        let s = parse_status_json(json).unwrap();
+        assert_eq!(s.server_version.as_deref(), Some("0.9.0"));
+        assert!(s.running && s.restart_needed);
+        let text = "client:\n  version: 0.9.5\n  protocol: 22\n\nserver:\n  status: running\n  version: 0.9.0\n\nupdate:\n  restart_needed: no\n  server_binary_stale: yes\n";
+        let s = parse_status_text(text).unwrap();
+        assert_eq!(s.server_version.as_deref(), Some("0.9.0"));
+        assert!(s.restart_needed);
+        // Only a version, no stale flag (an older herdr): still a restart.
+        let text = "client:\n  version: 0.9.5\n\nserver:\n  status: running\n  version: 0.9.0\n";
+        assert!(parse_status_text(text).unwrap().restart_needed);
+        // The same version on both sides is not.
+        let text = "client:\n  version: 0.9.5\n\nserver:\n  status: running\n  version: 0.9.5\n";
+        assert!(!parse_status_text(text).unwrap().restart_needed);
     }
 
     #[test]

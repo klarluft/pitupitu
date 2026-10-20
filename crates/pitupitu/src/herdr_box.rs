@@ -351,6 +351,7 @@ mod tests {
             protocol: Some(22),
             binary: None,
             running: true,
+            server_version: None,
             restart_needed: false,
         };
         assert_eq!(
