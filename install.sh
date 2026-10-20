@@ -1,8 +1,8 @@
 #!/bin/sh
 # Installs the pitupitu box agent: curl -fsSL https://pitupitu.chat/install | sh
 # Downloads the latest release for this machine into ~/.local/bin (or
-# $PITUPITU_INSTALL_DIR), checks its SHA-256, then runs `pitupitu setup`
-# when there is a terminal to answer it.
+# $PITUPITU_INSTALL_DIR), checks its SHA-256, installs herdr when it is
+# missing, then runs `pitupitu setup` when there is a terminal to answer it.
 set -eu
 
 repo="klarluft/pitupitu"
@@ -43,10 +43,17 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "add $dir to your PATH to run pitupitu from a shell" ;;
 esac
-if command -v herdr >/dev/null 2>&1; then
-  echo "herdr found: sessions will run there when it is running (pitupitu box driver to change)"
-else
-  echo "herdr not found: pitupitu will run your agents in its own terminals (pitupitu attach shows them)"
+# pitupitu runs the agents in herdr: installed with herdr's own installer
+# when it is missing. A failure is said, not fatal; setup tries again.
+herdr_dir="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
+if ! command -v herdr >/dev/null 2>&1 && [ ! -x "$herdr_dir/herdr" ]; then
+  echo "pitupitu runs your agents in herdr; installing it"
+  if curl -fsSL https://herdr.dev/install.sh -o "$tmp/herdr-install.sh" &&
+    sh "$tmp/herdr-install.sh"; then
+    :
+  else
+    echo "could not install herdr; pitupitu setup will try again (or see https://herdr.dev)" >&2
+  fi
 fi
 
 # `-r /dev/tty` is true even without a controlling terminal; opening it

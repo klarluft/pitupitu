@@ -38,7 +38,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Sign this box in, create the home folder, install the user service.
+    /// Sign this box in, create the home folder, install herdr when it is
+    /// missing, install the user service.
     Setup {
         /// The home folder (default: ~/pitupitu, or the one set before).
         #[arg(long)]
@@ -55,6 +56,13 @@ enum Cmd {
         /// Only print the sign-in URL; do not try to open a browser.
         #[arg(long)]
         no_browser: bool,
+        /// Linux: keep the service (and herdr) running when nobody is
+        /// logged in (`loginctl enable-linger`), without asking.
+        #[arg(long, conflicts_with = "no_linger")]
+        linger: bool,
+        /// Linux: do not offer lingering.
+        #[arg(long)]
+        no_linger: bool,
     },
     /// Hold the link to pitupitu cloud open (what the service runs).
     Connect,
@@ -230,7 +238,14 @@ async fn main() -> Result<()> {
             box_name,
             no_service,
             no_browser,
+            linger,
+            no_linger,
         } => {
+            let linger = match (linger, no_linger) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
             setup(
                 &path,
                 home.as_deref(),
@@ -238,6 +253,7 @@ async fn main() -> Result<()> {
                 box_name,
                 no_service,
                 no_browser,
+                linger,
             )
             .await
         }
@@ -265,6 +281,10 @@ async fn main() -> Result<()> {
                 Some(file) => eprintln!("removed {}", file.display()),
                 None => eprintln!("no pitupitu service was installed"),
             }
+            eprintln!(
+                "herdr is left as it is, with its server and sessions; remove it the way it was \
+                 installed if you want it gone"
+            );
             Ok(())
         }
         Cmd::Prefs { action } => {
@@ -491,6 +511,7 @@ async fn setup(
     box_name: Option<String>,
     no_service: bool,
     no_browser: bool,
+    linger: Option<bool>,
 ) -> Result<()> {
     let cfg = Config::load(path)?;
 
@@ -564,7 +585,13 @@ async fn setup(
         }
     }
 
-    // 4. The service.
+    // 4. herdr, which runs the agents.
+    setup_herdr().await;
+
+    // 5. The service.
+    if !no_service {
+        offer_linger(path, linger)?;
+    }
     if no_service {
         eprintln!();
         eprintln!("  run `pitupitu connect` to link this box");
@@ -575,14 +602,84 @@ async fn setup(
             installed.file.display()
         );
         eprintln!("  logs: {}", installed.logs);
-        if let Some(hint) = service::linger_hint() {
-            eprintln!("  {hint}");
-        }
     }
     // Another cloud (a local gateway) has its own site, which the box does not know.
     if cfg.cloud_url == config::DEFAULT_CLOUD_URL {
         eprintln!();
         eprintln!("  now open https://pitupitu.chat/app");
+    }
+    Ok(())
+}
+
+/// herdr is how pitupitu runs agents: installed with its own installer
+/// when missing (said in one line, not asked), then herdr's integrations
+/// for the agents found here, so herdr resumes their sessions after its
+/// server restarts. Failures are said and setup goes on; the next setup
+/// tries again.
+async fn setup_herdr() {
+    let bin = match herdr_box::find_binary() {
+        Some(b) => b,
+        None => {
+            eprintln!("  pitupitu runs your agents in herdr; installing it");
+            match herdr_box::install() {
+                Ok(b) => {
+                    eprintln!("  herdr installed: {}", b.display());
+                    b
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  could not install herdr ({e:#}); install it from https://herdr.dev, \
+                         then run `pitupitu setup` again"
+                    );
+                    return;
+                }
+            }
+        }
+    };
+    let cli = HerdrCli::with_binary(bin.display().to_string());
+    for kind in ["claude", "codex"] {
+        if herdr_box::on_path(kind).is_none() {
+            continue;
+        }
+        match cli.integration_install(kind).await {
+            Ok(_) => eprintln!("  herdr integration for {kind}: installed"),
+            Err(e) => eprintln!("  herdr integration for {kind}: {e}"),
+        }
+    }
+    eprintln!("  open `herdr` on this machine to see the sessions your phone sees");
+}
+
+/// On Linux, user services stop at logout: offered once, `--linger` or
+/// `--no-linger` decide for a script, and without a terminal it is only
+/// mentioned.
+fn offer_linger(path: &std::path::Path, choice: Option<bool>) -> Result<()> {
+    let Some(user) = service::linger_off() else {
+        return Ok(());
+    };
+    let yes = match choice {
+        Some(c) => c,
+        None if config::get(path, "setup", "linger_offered").is_some() => return Ok(()),
+        None if !std::io::stdin().is_terminal() => {
+            eprintln!(
+                "  to keep pitupitu and herdr running with nobody logged in: loginctl enable-linger {user}"
+            );
+            return Ok(());
+        }
+        None => {
+            eprintln!(
+                "  lingering keeps pitupitu and herdr running when nobody is logged in here, \
+                 and starts them after a reboot"
+            );
+            let answer = ask("turn it on (loginctl enable-linger)? y/n", "n");
+            config::set(path, &[("setup", "linger_offered", "yes")])?;
+            answer.to_lowercase().starts_with('y')
+        }
+    };
+    if yes {
+        match service::enable_linger(&user) {
+            Ok(()) => eprintln!("  lingering on for {user}"),
+            Err(e) => eprintln!("  could not turn lingering on: {e:#}"),
+        }
     }
     Ok(())
 }

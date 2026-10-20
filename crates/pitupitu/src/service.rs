@@ -46,8 +46,19 @@ fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
     )
 }
 
+/// The PATH the service runs with: the installing shell's, plus herdr's
+/// folder when herdr was just installed somewhere that is not on it yet.
 fn env_path() -> String {
-    std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into())
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
+    match crate::herdr_box::find_binary()
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        Some(dir) if !std::env::split_paths(&path).any(|d| d == dir) => {
+            format!("{path}:{}", dir.display())
+        }
+        _ => path,
+    }
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<()> {
@@ -325,9 +336,10 @@ pub fn status() -> String {
     }
 }
 
-/// On Linux, user services stop at logout unless lingering is on.
-pub fn linger_hint() -> Option<String> {
-    if !cfg!(target_os = "linux") {
+/// On Linux with systemd, user services stop at logout and start only at
+/// login unless lingering is on. The user it is off for, else `None`.
+pub fn linger_off() -> Option<String> {
+    if !cfg!(target_os = "linux") || !Path::new("/run/systemd/system").exists() {
         return None;
     }
     let user = std::env::var("USER").ok()?;
@@ -337,9 +349,12 @@ pub fn linger_hint() -> Option<String> {
         .ok()?;
     String::from_utf8_lossy(&out.stdout)
         .contains("Linger=no")
-        .then(|| {
-            format!("to keep pitupitu running after you log out: loginctl enable-linger {user}")
-        })
+        .then_some(user)
+}
+
+/// `loginctl enable-linger <user>`.
+pub fn enable_linger(user: &str) -> Result<()> {
+    run("loginctl", &["enable-linger", user])
 }
 
 #[cfg(test)]

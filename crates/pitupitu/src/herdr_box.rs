@@ -76,6 +76,46 @@ pub fn install_kind(binary: Option<&Path>) -> &'static str {
     }
 }
 
+/// herdr's own installer.
+pub const INSTALLER: &str = "https://herdr.dev/install.sh";
+
+/// `name` on `PATH`, as the shell would find it.
+pub fn on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|f| f.is_file())
+}
+
+/// The `herdr` binary: on `PATH`, else where herdr's installer puts it
+/// (which a fresh install may not have on `PATH` yet).
+pub fn find_binary() -> Option<PathBuf> {
+    on_path("herdr").or_else(|| {
+        let dir = std::env::var_os("HERDR_INSTALL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::config::home_dir().join(".local/bin"));
+        Some(dir.join("herdr")).filter(|f| f.is_file())
+    })
+}
+
+/// Install herdr with its own installer, its output shown as it runs.
+/// Returns where the binary landed.
+pub fn install() -> anyhow::Result<PathBuf> {
+    let script = format!(
+        "set -e; f=\"$(mktemp)\"; trap 'rm -f \"$f\"' EXIT; curl -fsSL {INSTALLER} -o \"$f\"; sh \"$f\""
+    );
+    let status = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|e| anyhow::anyhow!("running sh: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("herdr's installer exited with {status}");
+    }
+    find_binary()
+        .ok_or_else(|| anyhow::anyhow!("herdr's installer ran, but no herdr is to be found"))
+}
+
 /// `herdr status`, or for a herdr too old for it, `--version` alone.
 /// `None` when herdr is not installed (or cannot be run at all).
 pub async fn status(cli: &HerdrCli) -> Option<Status> {
