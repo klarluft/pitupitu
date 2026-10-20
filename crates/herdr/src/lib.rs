@@ -14,11 +14,13 @@
 //!   right after can see the stale `idle`. Callers must key on
 //!   `state_change_seq` advancing, not on status alone.
 
+pub mod admin;
 mod cli;
 pub mod detect;
 mod types;
 
-pub use cli::HerdrCli;
+pub use admin::{Status, SERVER_NOT_RUNNING};
+pub use cli::{HerdrCli, SESSION_ENV};
 pub use types::*;
 
 use async_trait::async_trait;

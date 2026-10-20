@@ -863,7 +863,6 @@ dependencies = [
  "clap",
  "dirs",
  "futures-util",
- "libc",
  "pitupitu-herdr",
  "rand 0.9.5",
  "reqwest",
@@ -883,6 +882,7 @@ name = "pitupitu-herdr"
 version = "0.3.3"
 dependencies = [
  "async-trait",
+ "libc",
  "serde",
  "serde_json",
  "thiserror",

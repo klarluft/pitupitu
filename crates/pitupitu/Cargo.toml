@@ -13,7 +13,6 @@ clap.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
 herdr = { path = "../herdr", package = "pitupitu-herdr" }
-libc = "0.2"
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

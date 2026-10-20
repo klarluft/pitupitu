@@ -20,7 +20,9 @@ const SETTLE: Duration = Duration::from_millis(1500);
 /// socket reachable; it inherits that context from the environment.
 #[derive(Debug, Clone)]
 pub struct HerdrCli {
-    bin: String,
+    pub(crate) bin: String,
+    /// A named herdr session (`--session`) instead of the default one.
+    pub(crate) session: Option<String>,
 }
 
 impl Default for HerdrCli {
@@ -29,16 +31,45 @@ impl Default for HerdrCli {
     }
 }
 
+/// Names a herdr session other than the default one, for tests only:
+/// they run against a throwaway server and never touch the person's.
+pub const SESSION_ENV: &str = "PITUPITU_HERDR_SESSION";
+
 impl HerdrCli {
-    /// Uses `$HERDR_BIN` if set, else `herdr` from `PATH`.
+    /// Uses `$HERDR_BIN` if set, else `herdr` from `PATH`, and herdr's
+    /// default session unless `$PITUPITU_HERDR_SESSION` names another.
     pub fn new() -> Self {
         Self {
             bin: std::env::var("HERDR_BIN").unwrap_or_else(|_| "herdr".to_string()),
+            session: std::env::var(SESSION_ENV).ok().filter(|s| !s.is_empty()),
         }
     }
 
     pub fn with_binary(bin: impl Into<String>) -> Self {
-        Self { bin: bin.into() }
+        Self {
+            bin: bin.into(),
+            session: None,
+        }
+    }
+
+    /// Every command against the named session `name`.
+    pub fn with_session(mut self, name: impl Into<String>) -> Self {
+        self.session = Some(name.into());
+        self
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    /// The command line before the subcommand: the binary and, for a
+    /// named session, `--session <name>`.
+    pub(crate) fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        if let Some(s) = &self.session {
+            cmd.args(["--session", s]);
+        }
+        cmd
     }
 
     /// `herdr --version`, e.g. `herdr 0.9.3`.
@@ -117,9 +148,13 @@ impl HerdrCli {
         Ok(stdout)
     }
 
-    async fn exec(&self, args: &[&str]) -> Result<(std::process::ExitStatus, String, String)> {
+    pub(crate) async fn exec(
+        &self,
+        args: &[&str],
+    ) -> Result<(std::process::ExitStatus, String, String)> {
         debug!(bin = %self.bin, ?args, "herdr");
-        let out = Command::new(&self.bin)
+        let out = self
+            .command()
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
