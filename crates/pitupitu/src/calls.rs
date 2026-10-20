@@ -1,11 +1,11 @@
 //! One box link call → one `AgentHost` method. The cloud can ask for these
 //! calls and nothing else: no shell, no arbitrary herdr command.
 
-use herdr::{AgentHost, AgentStatus, PaneId, StartOpts, TabId, WorkspaceId};
+use herdr::{AgentHost, AgentKind, AgentStatus, Created, PaneId, StartOpts, TabId, WorkspaceId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Longest `wait` the cloud may ask for.
@@ -99,6 +99,11 @@ struct CreateWorkspace {
     /// workspace is opened when this box cannot start it.
     #[serde(default)]
     kind: Option<String>,
+    /// Work in the pitupitu home folder (a lookup, a question): a tab in
+    /// the box's one `pitupitu` workspace instead of a workspace of its
+    /// own.
+    #[serde(default)]
+    scratch: bool,
 }
 
 #[derive(Deserialize)]
@@ -164,6 +169,49 @@ struct SendKeys {
     keys: Vec<String>,
 }
 
+/// The label of the box's workspace for scratch work.
+pub const SCRATCH_LABEL: &str = "pitupitu";
+
+/// One scratch tab is opened at a time, so two at once do not make two
+/// `pitupitu` workspaces.
+static SCRATCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// herdr's tab ids are `<workspace>:t<n>`; its workspace ids have no `:`.
+fn is_tab(id: &str) -> bool {
+    id.contains(':')
+}
+
+/// A tab for scratch work in the box's `pitupitu` workspace, which is
+/// found by its label (so again after a restart) or opened in `cwd`, the
+/// home folder, when there is none; its first tab is then the task's. The
+/// workspace id in what comes back is the tab's own id, so that
+/// `close_workspace` on it closes this tab and leaves the other scratch
+/// tasks alone.
+async fn scratch_tab(
+    host: &dyn AgentHost,
+    cwd: &Path,
+    label: &str,
+    kind: Option<&AgentKind>,
+) -> herdr::Result<Created> {
+    if let Some(k) = kind {
+        herdr::refuse_unsupported(&host.kinds().await, k)?;
+    }
+    let _one = SCRATCH.lock().await;
+    let existing = host
+        .list_workspaces()
+        .await?
+        .into_iter()
+        .find(|w| w.label == SCRATCH_LABEL);
+    let created = match existing {
+        Some(w) => host.create_tab(&w.workspace_id, Some(cwd), label).await?,
+        None => host.create_workspace(cwd, SCRATCH_LABEL).await?,
+    };
+    Ok(Created {
+        workspace_id: WorkspaceId(created.tab_id.0.clone()),
+        ..created
+    })
+}
+
 /// How long the box lets a call run before answering `timeout` itself:
 /// the call's own timeout plus a margin, or a generous default.
 pub fn deadline(call: &str, args: &Value) -> Duration {
@@ -189,9 +237,13 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
                 .kind
                 .map(|k| k.parse::<herdr::AgentKind>().map_err(CallError::bad_call))
                 .transpose()?;
-            ok(host
-                .create_workspace_for(&a.cwd, &a.label, kind.as_ref())
-                .await?)
+            if a.scratch {
+                ok(scratch_tab(host, &a.cwd, &a.label, kind.as_ref()).await?)
+            } else {
+                ok(host
+                    .create_workspace_for(&a.cwd, &a.label, kind.as_ref())
+                    .await?)
+            }
         }
         "create_tab" => {
             let a: CreateTab = args(call, a)?;
@@ -201,7 +253,12 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         }
         "close_workspace" => {
             let a: Workspace = args(call, a)?;
-            ok(host.close_workspace(&a.workspace).await?)
+            // A scratch task's "workspace" is its tab (see `scratch_tab`).
+            if is_tab(&a.workspace.0) {
+                ok(host.close_tab(&TabId(a.workspace.0)).await?)
+            } else {
+                ok(host.close_workspace(&a.workspace).await?)
+            }
         }
         "close_tab" => {
             let a: Tab = args(call, a)?;
@@ -319,6 +376,86 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(host.log(), ["create_workspace /x x"]);
+    }
+
+    #[tokio::test]
+    async fn scratch_work_shares_one_pitupitu_workspace_a_tab_each() {
+        let host = FakeHost::default();
+        let scratch = |label: &str| json!({"cwd": "/home/me/pitupitu", "label": label, "scratch": true, "kind": "claude"});
+        let first = dispatch(&host, "create_workspace", scratch("weather"))
+            .await
+            .unwrap();
+        let second = dispatch(&host, "create_workspace", scratch("trains"))
+            .await
+            .unwrap();
+        assert_eq!(
+            host.log(),
+            [
+                "create_workspace /home/me/pitupitu pitupitu",
+                "create_tab w9 trains"
+            ]
+        );
+        // Each names its own tab, also as its workspace...
+        assert_eq!(first["workspace_id"], "w9:t1");
+        assert_eq!(second["workspace_id"], second["tab_id"]);
+        assert_ne!(first["tab_id"], second["tab_id"]);
+        // ...so closing one closes that tab only.
+        dispatch(&host, "close_workspace", json!({"workspace": "w9:t1"}))
+            .await
+            .unwrap();
+        dispatch(&host, "close_workspace", json!({"workspace": "w3"}))
+            .await
+            .unwrap();
+        let log = host.log();
+        assert_eq!(log[2..], ["close_tab w9:t1", "close_workspace w3"]);
+        // A protocol 2 cloud's `driver` hint is ignored.
+        dispatch(
+            &host,
+            "create_workspace",
+            json!({"cwd": "/x", "label": "x", "driver": "terminal"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(host.log().last().unwrap(), "create_workspace /x x");
+    }
+
+    /// The same against a live herdr, in a throwaway session.
+    #[tokio::test]
+    async fn scratch_tabs_in_a_live_herdr() {
+        let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
+            return;
+        };
+        let host = &scratch.cli;
+        host.start_server().unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        while host.list_workspaces().await.is_err() {
+            assert!(std::time::Instant::now() < end, "no server");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let args = |label: &str| json!({"cwd": home.path(), "label": label, "scratch": true});
+        let a = dispatch(host, "create_workspace", args("a")).await.unwrap();
+        let b = dispatch(host, "create_workspace", args("b")).await.unwrap();
+        let ws = host.list_workspaces().await.unwrap();
+        let ours: Vec<_> = ws.iter().filter(|w| w.label == SCRATCH_LABEL).collect();
+        assert_eq!(ours.len(), 1, "{ws:?}");
+        assert_eq!(a["cwd"], json!(home.path()));
+        dispatch(
+            host,
+            "close_workspace",
+            json!({"workspace": a["workspace_id"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(host.list_workspaces().await.unwrap().len(), 1);
+        dispatch(
+            host,
+            "close_workspace",
+            json!({"workspace": b["workspace_id"]}),
+        )
+        .await
+        .unwrap();
+        assert!(host.list_workspaces().await.unwrap().is_empty());
     }
 
     #[tokio::test]
