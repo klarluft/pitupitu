@@ -13,6 +13,7 @@ use std::time::Duration;
 pub struct FakeHost {
     log: Arc<Mutex<Vec<String>>>,
     pub agents: Arc<Mutex<Vec<AgentInfo>>>,
+    pub workspaces: Arc<Mutex<Vec<Workspace>>>,
 }
 
 pub fn agent(name: &str, pane: &str, status: AgentStatus, seq: u64) -> AgentInfo {
@@ -45,24 +46,45 @@ impl FakeHost {
 #[async_trait]
 impl AgentHost for FakeHost {
     async fn list_workspaces(&self) -> Result<Vec<Workspace>> {
-        Ok(vec![])
+        Ok(self.workspaces.lock().unwrap().clone())
     }
 
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created> {
         self.note(format!("create_workspace {} {label}", cwd.display()));
+        let mut ws = self.workspaces.lock().unwrap();
+        let id = format!("w{}", 9 + ws.len());
+        ws.push(Workspace {
+            workspace_id: WorkspaceId(id.clone()),
+            label: label.into(),
+            agent_status: None,
+            focused: false,
+        });
         Ok(Created {
-            workspace_id: WorkspaceId("w9".into()),
-            tab_id: TabId("w9:t1".into()),
-            root_pane: PaneId("w9:p1".into()),
+            workspace_id: WorkspaceId(id.clone()),
+            tab_id: TabId(format!("{id}:t1")),
+            root_pane: PaneId(format!("{id}:p1")),
             cwd: cwd.to_path_buf(),
         })
     }
 
-    async fn create_tab(&self, _: &WorkspaceId, _: Option<&Path>, _: &str) -> Result<Created> {
-        unimplemented!()
+    async fn create_tab(
+        &self,
+        workspace: &WorkspaceId,
+        cwd: Option<&Path>,
+        label: &str,
+    ) -> Result<Created> {
+        let n = self.log().len() + 2;
+        self.note(format!("create_tab {workspace} {label}"));
+        Ok(Created {
+            workspace_id: workspace.clone(),
+            tab_id: TabId(format!("{workspace}:t{n}")),
+            root_pane: PaneId(format!("{workspace}:p{n}")),
+            cwd: cwd.map(Path::to_path_buf).unwrap_or_default(),
+        })
     }
 
-    async fn close_workspace(&self, _: &WorkspaceId) -> Result<()> {
+    async fn close_workspace(&self, workspace: &WorkspaceId) -> Result<()> {
+        self.note(format!("close_workspace {workspace}"));
         Ok(())
     }
 
@@ -83,6 +105,10 @@ impl AgentHost for FakeHost {
             opts.accept_trust_prompt, opts.agent_args
         ));
         Ok(agent(name, &pane.0, AgentStatus::Idle, 1))
+    }
+
+    async fn kinds(&self) -> Vec<String> {
+        vec!["claude".into(), "codex".into()]
     }
 
     async fn prompt(&self, agent_name: &str, _: &str) -> Result<AgentInfo> {
@@ -119,5 +145,46 @@ impl AgentHost for FakeHost {
 
     async fn send_keys(&self, _: &str, _: &[&str]) -> Result<()> {
         Ok(())
+    }
+}
+
+/// A throwaway herdr session for tests that need a live herdr: no server
+/// runs in it at first, and it is stopped and deleted on drop, passed or
+/// not. The person's own session is never touched. `None` when `herdr`
+/// is not on `PATH`, and the test skips.
+pub struct ScratchHerdr {
+    pub cli: herdr::HerdrCli,
+    name: String,
+}
+
+impl ScratchHerdr {
+    pub fn new() -> Option<Self> {
+        if std::process::Command::new("herdr")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipped: herdr is not on PATH");
+            return None;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let name = format!("pitutest-{}-{nanos}", std::process::id());
+        Some(ScratchHerdr {
+            cli: herdr::HerdrCli::with_binary("herdr").with_session(&name),
+            name,
+        })
+    }
+}
+
+impl Drop for ScratchHerdr {
+    fn drop(&mut self) {
+        let herdr = |args: &[&str]| {
+            let _ = std::process::Command::new("herdr").args(args).output();
+        };
+        herdr(&["--session", &self.name, "server", "stop"]);
+        herdr(&["session", "delete", &self.name]);
     }
 }

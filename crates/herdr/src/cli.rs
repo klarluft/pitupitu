@@ -10,13 +10,19 @@ use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
+/// How long the screen must hold still after `idle` before an agent counts
+/// as ready for a prompt.
+const SETTLE: Duration = Duration::from_millis(1500);
+
 /// Drives herdr by shelling out to its CLI.
 ///
 /// The CLI only works from inside a herdr-managed pane or with the server's
 /// socket reachable; it inherits that context from the environment.
 #[derive(Debug, Clone)]
 pub struct HerdrCli {
-    bin: String,
+    pub(crate) bin: String,
+    /// A named herdr session (`--session`) instead of the default one.
+    pub(crate) session: Option<String>,
 }
 
 impl Default for HerdrCli {
@@ -25,16 +31,45 @@ impl Default for HerdrCli {
     }
 }
 
+/// Names a herdr session other than the default one, for tests only:
+/// they run against a throwaway server and never touch the person's.
+pub const SESSION_ENV: &str = "PITUPITU_HERDR_SESSION";
+
 impl HerdrCli {
-    /// Uses `$HERDR_BIN` if set, else `herdr` from `PATH`.
+    /// Uses `$HERDR_BIN` if set, else `herdr` from `PATH`, and herdr's
+    /// default session unless `$PITUPITU_HERDR_SESSION` names another.
     pub fn new() -> Self {
         Self {
             bin: std::env::var("HERDR_BIN").unwrap_or_else(|_| "herdr".to_string()),
+            session: std::env::var(SESSION_ENV).ok().filter(|s| !s.is_empty()),
         }
     }
 
     pub fn with_binary(bin: impl Into<String>) -> Self {
-        Self { bin: bin.into() }
+        Self {
+            bin: bin.into(),
+            session: None,
+        }
+    }
+
+    /// Every command against the named session `name`.
+    pub fn with_session(mut self, name: impl Into<String>) -> Self {
+        self.session = Some(name.into());
+        self
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    /// The command line before the subcommand: the binary and, for a
+    /// named session, `--session <name>`.
+    pub(crate) fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        if let Some(s) = &self.session {
+            cmd.args(["--session", s]);
+        }
+        cmd
     }
 
     /// `herdr --version`, e.g. `herdr 0.9.3`.
@@ -113,9 +148,13 @@ impl HerdrCli {
         Ok(stdout)
     }
 
-    async fn exec(&self, args: &[&str]) -> Result<(std::process::ExitStatus, String, String)> {
+    pub(crate) async fn exec(
+        &self,
+        args: &[&str],
+    ) -> Result<(std::process::ExitStatus, String, String)> {
         debug!(bin = %self.bin, ?args, "herdr");
-        let out = Command::new(&self.bin)
+        let out = self
+            .command()
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -130,21 +169,46 @@ impl HerdrCli {
         ))
     }
 
-    /// Claude Code's first-run dialog in a directory it has not seen. The
-    /// highlighted row carries `❯`; "No, exit" is the default.
+    /// Ready for input means more than herdr's `idle`: right after start
+    /// (and after the trust dialog, when Claude Code reloads) the status
+    /// flips to idle a moment before the agent reads keys, and a prompt
+    /// typed then is lost. So the visible screen must also hold still for
+    /// a while (`docs/sessions.md`).
+    async fn settled(&self, agent: &str, deadline: std::time::Instant) -> Result<()> {
+        let mut last = String::new();
+        let mut since = std::time::Instant::now();
+        loop {
+            let screen = self
+                .run_text(&[
+                    "agent", "read", agent, "--source", "visible", "--lines", "40",
+                ])
+                .await?;
+            if screen != last {
+                last = screen;
+                since = std::time::Instant::now();
+            } else if since.elapsed() >= SETTLE {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
+    /// The folder trust dialog, answered without changing how the agent
+    /// asks for permission ([`crate::detect::trust_keys`]): Claude Code's
+    /// "Yes, I trust this folder", Codex's "No, ask me to approve".
     async fn answer_trust_prompt(&self, agent: &str) -> Result<bool> {
         let screen = self.read(agent, 40).await?;
-        if !screen.contains("trust this folder") {
+        if crate::detect::dialog(&screen) != Some(crate::detect::Dialog::Trust) {
             return Ok(false);
         }
-        let yes_highlighted = screen.lines().any(|l| l.contains('❯') && l.contains("Yes"));
-        let keys: &[&str] = if yes_highlighted {
-            &["enter"]
-        } else {
-            &["down", "enter"]
+        let Some(keys) = crate::detect::trust_keys(&screen) else {
+            return Ok(false);
         };
         debug!(agent, ?keys, "answering trust prompt");
-        self.send_keys(agent, keys).await?;
+        self.send_keys(agent, &keys).await?;
         Ok(true)
     }
 }
@@ -162,6 +226,21 @@ fn blank(text: &str) -> bool {
         }
     }
     true
+}
+
+/// The `kinds: a|b|c` line `herdr agent` prints with its command list
+/// (on stderr, exit status 2: it is usage text, not a command).
+fn parse_kinds(usage: &str) -> Vec<String> {
+    usage
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("kinds:"))
+        .map(|k| {
+            k.split('|')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_api_error(text: &str) -> Option<Error> {
@@ -318,6 +397,7 @@ impl AgentHost for HerdrCli {
             Err(e) => return Err(e),
         }
         let settle = opts.timeout.unwrap_or(Duration::from_secs(30));
+        let deadline = std::time::Instant::now() + settle;
         let info = self
             .wait(name, &[AgentStatus::Idle, AgentStatus::Done], settle)
             .await?;
@@ -329,10 +409,42 @@ impl AgentHost for HerdrCli {
                 why: format!("{}:\n{}", info.agent_status, screen.trim()),
             });
         }
-        Ok(info)
+        self.settled(name, deadline).await?;
+        self.agent(name).await
     }
 
+    /// The kinds this herdr knows, from `herdr agent`'s usage text. That
+    /// is printed without a server, so whether one answers is the
+    /// caller's to say.
+    async fn kinds(&self) -> Vec<String> {
+        match self.exec(&["agent"]).await {
+            Ok((_, stdout, stderr)) => {
+                let k = parse_kinds(&stderr);
+                if k.is_empty() {
+                    parse_kinds(&stdout)
+                } else {
+                    k
+                }
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Idle is not permission (`docs/sessions.md`): the live screen is
+    /// looked at first, and a dialog there refuses the prompt whatever
+    /// herdr's state says. herdr adds its own check on its state.
     async fn prompt(&self, agent: &str, text: &str) -> Result<AgentInfo> {
+        let screen = self
+            .run_text(&[
+                "agent", "read", agent, "--source", "visible", "--lines", "40",
+            ])
+            .await?;
+        if let Some(d) = crate::detect::dialog(&screen) {
+            return Err(Error::Api {
+                code: "agent_blocked".into(),
+                message: format!("{d:?} dialog on screen; read it and answer with send_keys"),
+            });
+        }
         self.run_json(&["agent", "prompt", agent, text])
             .await
             .and_then(agent_from)
@@ -384,6 +496,21 @@ impl AgentHost for HerdrCli {
 }
 
 #[cfg(test)]
+mod kinds_tests {
+    use super::parse_kinds;
+
+    #[test]
+    fn the_kinds_line_is_read_from_the_usage_text() {
+        let usage = "herdr agent commands:\n  herdr agent list\n  targets accept unique agent names\n  kinds: pi|claude|codex|gemini|agy\n";
+        assert_eq!(
+            parse_kinds(usage),
+            ["pi", "claude", "codex", "gemini", "agy"]
+        );
+        assert!(parse_kinds("no such line").is_empty());
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -436,5 +563,67 @@ mod tests {
         let e = cli.read("x", 80).await.unwrap_err();
         assert_eq!(e.code(), Some("agent_not_found"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod prompt_tests {
+    use super::*;
+
+    /// A stand-in `herdr` that logs its arguments and answers `agent read`
+    /// with `screen`, `agent prompt` with an agent.
+    fn fake_herdr(screen: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pitupitu-herdr-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let screen_file = dir.join("screen");
+        std::fs::write(&screen_file, screen).unwrap();
+        let bin = dir.join("herdr");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1 $2\" in\n\
+                 'agent read') cat '{}';;\n\
+                 'agent prompt') echo '{{\"id\":1,\"result\":{{\"agent\":{{\"agent\":\"claude\",\"name\":\"n\",\
+                 \"agent_status\":\"idle\",\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"cwd\":\"/tmp\",\
+                 \"state_change_seq\":3}}}}}}';;\n\
+                 esac\n",
+                log.display(),
+                screen_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (bin, log)
+    }
+
+    #[tokio::test]
+    async fn a_dialog_on_screen_refuses_the_prompt_before_herdr_is_asked() {
+        let (bin, log) =
+            fake_herdr("⏺ Bash(rm -rf build)\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        let e = cli.prompt("n", "hello").await.unwrap_err();
+        assert_eq!(e.code(), Some("agent_blocked"), "{e}");
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("agent read n --source visible"), "{log}");
+        assert!(!log.contains("agent prompt"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_clear_screen_lets_the_prompt_through() {
+        let (bin, log) = fake_herdr("> \n? for shortcuts\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        let info = cli.prompt("n", "hello").await.unwrap();
+        assert_eq!(info.state_change_seq, 3);
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("agent prompt n hello"), "{log}");
     }
 }

@@ -1,5 +1,7 @@
-//! What this box has, for the cloud (box link protocol 2): which agent
-//! CLIs are on `PATH`, and the project folders agents worked in recently.
+//! What this box has, for the cloud (box link protocol 3): how the box
+//! agent and herdr were installed and whether newer releases exist, the
+//! kinds herdr can start, which agent CLIs are on `PATH`, and the project
+//! folders agents worked in recently.
 //!
 //! Recent folders come from the agents' own session history: Claude Code's
 //! `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`.
@@ -8,6 +10,7 @@
 //! credentials are never read: whether an agent is logged in is not
 //! checked at all.
 
+use crate::herdr_box::HerdrInfo;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -15,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// Agent CLIs looked for on `PATH`.
-const KINDS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+const KINDS: &[&str] = &["claude", "codex", "gemini", "agy", "opencode"];
 /// Recent folders sent, newest first.
 const RECENT_MAX: usize = 30;
 /// Session files looked at, newest first.
@@ -39,10 +42,15 @@ pub struct Recent {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Inventory {
-    /// What serves the calls: `herdr` (the terminal host comes later).
-    pub driver: String,
-    /// herdr's version; empty when it is not there.
-    pub herdr: String,
+    /// How this box agent was installed: `installer` or `brew`.
+    pub install: &'static str,
+    /// A newer release than this box runs, when GitHub said so.
+    pub latest: Option<String>,
+    /// herdr's version, server and updates; `None` when it is not
+    /// installed.
+    pub herdr: Option<HerdrInfo>,
+    /// The agent kinds herdr can start; empty while it does not answer.
+    pub kinds: Vec<String>,
     pub available: Vec<Available>,
     pub recent: Vec<Recent>,
 }

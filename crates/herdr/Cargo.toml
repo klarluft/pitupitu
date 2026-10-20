@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait.workspace = true
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -2,7 +2,7 @@
 //! `default` and `settings`, over `GET`/`PATCH /v1/settings` with this
 //! box's key. The preferences are what the person tells pitupitu about
 //! themselves and their machines; the voice foreman reads them in every
-//! conversation. `note`, `driver` and on/off (`enabled`) are this box's
+//! conversation. `note`, `agent` and on/off (`enabled`) are this box's
 //! own; `updates` is what the foreman brings up between turns unasked.
 
 use crate::config::Config;
@@ -11,7 +11,6 @@ use serde_json::{json, Value};
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 
-pub const DRIVERS: &[&str] = &["auto", "herdr", "terminal"];
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
 /// The agents a default can name; `auto` clears it.
 pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
@@ -131,7 +130,7 @@ pub fn print(settings: &Value, as_json: bool) {
     for b in settings["boxes"].as_array().into_iter().flatten() {
         let name = b["name"].as_str().unwrap_or("?");
         let mut line = format!(
-            "  {name}{}: {}{}, driver {}",
+            "  {name}{}: {}{}",
             if name == me { " (this box)" } else { "" },
             if b["online"] == true {
                 "online"
@@ -142,8 +141,7 @@ pub fn print(settings: &Value, as_json: bool) {
                 ", switched off"
             } else {
                 ""
-            },
-            b["driver"].as_str().unwrap_or("auto")
+            }
         );
         if let Some(a) = b["agent"].as_str() {
             line.push_str(&format!(", agent {a}"));

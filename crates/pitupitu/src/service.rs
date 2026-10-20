@@ -16,7 +16,8 @@ pub struct Installed {
     pub logs: String,
 }
 
-fn exe() -> Result<PathBuf> {
+/// The binary the service runs: this one, or its Homebrew `opt` link.
+pub fn exe() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("finding this binary")?;
     Ok(match homebrew_opt(&exe) {
         Some(opt) if opt.exists() => opt,
@@ -45,8 +46,19 @@ fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
     )
 }
 
+/// The PATH the service runs with: the installing shell's, plus herdr's
+/// folder when herdr was just installed somewhere that is not on it yet.
 fn env_path() -> String {
-    std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into())
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
+    match crate::herdr_box::find_binary()
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        Some(dir) if !std::env::split_paths(&path).any(|d| d == dir) => {
+            format!("{path}:{}", dir.display())
+        }
+        _ => path,
+    }
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<()> {
@@ -89,7 +101,7 @@ ExecStart={exec}
 Restart=always
 RestartSec=5
 # Stopping or restarting the service ends the box agent only, not the
-# terminal holder it started: agents running there keep running.
+# herdr server it may have started: agents running there keep running.
 KillMode=process
 Environment={env}
 
@@ -216,6 +228,55 @@ pub fn install(config: &Path) -> Result<Installed> {
     }
 }
 
+/// Whether a service for the box agent is installed here.
+pub fn installed() -> bool {
+    if cfg!(target_os = "macos") {
+        launchd_file().exists()
+    } else if cfg!(target_os = "linux") {
+        systemd_file().exists()
+    } else {
+        false
+    }
+}
+
+/// Restart the service so it runs the binary now at its path. `false`
+/// when no service is installed. Only the box agent restarts: herdr's
+/// server is not part of the service, even when the box started it.
+pub fn restart() -> Result<bool> {
+    if cfg!(target_os = "macos") {
+        if !launchd_file().exists() {
+            return Ok(false);
+        }
+        run(
+            "launchctl",
+            &["kickstart", "-k", &format!("gui/{}/{LABEL}", uid()?)],
+        )?;
+        Ok(true)
+    } else if cfg!(target_os = "linux") {
+        if !systemd_file().exists() {
+            return Ok(false);
+        }
+        run("systemctl", &["--user", "restart", UNIT])?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// [`restart`] without waiting for it, for the box agent restarting
+/// itself from inside the service: the service manager stops this
+/// process and starts the new binary.
+pub fn restart_soon() -> Result<bool> {
+    if cfg!(target_os = "linux") {
+        if !systemd_file().exists() {
+            return Ok(false);
+        }
+        run("systemctl", &["--user", "restart", "--no-block", UNIT])?;
+        return Ok(true);
+    }
+    restart()
+}
+
 pub fn uninstall() -> Result<Option<PathBuf>> {
     if cfg!(target_os = "macos") {
         let file = launchd_file();
@@ -275,9 +336,10 @@ pub fn status() -> String {
     }
 }
 
-/// On Linux, user services stop at logout unless lingering is on.
-pub fn linger_hint() -> Option<String> {
-    if !cfg!(target_os = "linux") {
+/// On Linux with systemd, user services stop at logout and start only at
+/// login unless lingering is on. The user it is off for, else `None`.
+pub fn linger_off() -> Option<String> {
+    if !cfg!(target_os = "linux") || !Path::new("/run/systemd/system").exists() {
         return None;
     }
     let user = std::env::var("USER").ok()?;
@@ -287,9 +349,12 @@ pub fn linger_hint() -> Option<String> {
         .ok()?;
     String::from_utf8_lossy(&out.stdout)
         .contains("Linger=no")
-        .then(|| {
-            format!("to keep pitupitu running after you log out: loginctl enable-linger {user}")
-        })
+        .then_some(user)
+}
+
+/// `loginctl enable-linger <user>`.
+pub fn enable_linger(user: &str) -> Result<()> {
+    run("loginctl", &["enable-linger", user])
 }
 
 #[cfg(test)]

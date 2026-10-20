@@ -121,6 +121,11 @@ impl Config {
     }
 }
 
+/// `[table] key` from the file, when it is there.
+pub fn get(path: &Path, table: &str, key: &str) -> Option<String> {
+    get_str(&read_doc(path).ok()?, table, key)
+}
+
 /// Set `[table] key = value` in the file, keeping everything else (comments
 /// included) as it was. Returns whether anything changed. The file ends up
 /// readable by its owner only, since it holds the key.

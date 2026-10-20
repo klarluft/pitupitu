@@ -14,10 +14,13 @@
 //!   right after can see the stale `idle`. Callers must key on
 //!   `state_change_seq` advancing, not on status alone.
 
+pub mod admin;
 mod cli;
+pub mod detect;
 mod types;
 
-pub use cli::HerdrCli;
+pub use admin::{Status, SERVER_NOT_RUNNING};
+pub use cli::{HerdrCli, SESSION_ENV};
 pub use types::*;
 
 use async_trait::async_trait;
@@ -50,9 +53,24 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// `unsupported_agent_kind` when `kinds` is known and lacks `kind`.
+pub fn refuse_unsupported(kinds: &[String], kind: &AgentKind) -> Result<()> {
+    if kinds.is_empty() || kinds.iter().any(|k| k == kind.as_str()) {
+        return Ok(());
+    }
+    Err(Error::Api {
+        code: "unsupported_agent_kind".into(),
+        message: format!(
+            "this box cannot start {kind}; it can start {}",
+            kinds.join(", ")
+        ),
+    })
+}
+
 /// What pitupitu cloud can ask of the box, one box link call per method
-/// (see `docs/box-link.md`). herdr is the only implementation today; the
-/// trait exists so another agent host could be added behind the same calls.
+/// (see `docs/box-link.md`). herdr is the only implementation; the trait
+/// is the seam, so tests can stand in for it and another host could be
+/// added behind the same calls.
 #[async_trait]
 pub trait AgentHost: Send + Sync {
     async fn list_workspaces(&self) -> Result<Vec<Workspace>>;
@@ -60,18 +78,24 @@ pub trait AgentHost: Send + Sync {
     /// Open a new workspace for `cwd`, with one fresh shell pane.
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created>;
 
-    /// [`AgentHost::create_workspace`] with the cloud's hint where the
-    /// session should run (`terminal` or `herdr`); a host with one place
-    /// to put it ignores the hint.
-    async fn create_workspace_hinted(
+    /// [`AgentHost::create_workspace`] for an agent of `kind`, refused as
+    /// `unsupported_agent_kind` before anything is opened when this host
+    /// cannot start it (`docs/sessions.md`, "Kinds").
+    async fn create_workspace_for(
         &self,
         cwd: &Path,
         label: &str,
-        driver: Option<&str>,
+        kind: Option<&AgentKind>,
     ) -> Result<Created> {
-        let _ = driver;
+        if let Some(k) = kind {
+            refuse_unsupported(&self.kinds().await, k)?;
+        }
         self.create_workspace(cwd, label).await
     }
+
+    /// The agent kinds this host can start right now. Empty means the
+    /// host cannot say, and nothing is refused on that account.
+    async fn kinds(&self) -> Vec<String>;
 
     /// Open a new tab in an existing workspace, with one fresh shell pane.
     /// `cwd` defaults to the workspace's directory.
