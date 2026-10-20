@@ -100,9 +100,7 @@ unsupported one before anything is opened. `start_agent` checks again.
 ## Ids and endings
 
 Ids are herdr's, opaque to the cloud: it stores and echoes them and never
-parses them. The box itself knows one thing about them: a tab id
-(`w3:t2`) has a `:` and a workspace id does not, which is how
-`close_workspace` on a scratch task's id closes only its tab.
+parses them.
 
 An agent that exits leaves the agent list; the cloud reports that as the
 session ending, with what it last did. After a herdr restart, herdr

@@ -67,9 +67,9 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | call | args | ok |
 |---|---|---|
 | `list_workspaces` | — | `[Workspace]` |
-| `create_workspace` | `cwd`, `label`, `kind?` (the agent the cloud means to start there; refused as `unsupported_agent_kind` before the workspace opens when herdr cannot start it; since 0.4), `scratch?` (default false; since 0.5: work in the pitupitu home folder, such as a lookup. The box opens a tab in its one `pitupitu` workspace instead of a workspace of its own, so the person's are not littered with lookups. That workspace is found by its label, or opened with `cwd` when there is none. `Created` names the tab and its pane, and its `workspace_id` is the tab's id, so `close_workspace` on it closes only that tab). A `driver` argument from a protocol 2 cloud is ignored | `Created` |
+| `create_workspace` | `cwd`, `label`, `kind?` (the agent the cloud means to start there; refused as `unsupported_agent_kind` before the workspace opens when herdr cannot start it; since 0.4), `scratch?` (default false; since 0.5: work in the pitupitu home folder, such as a lookup. The box opens a tab in its one `pitupitu` workspace instead of a workspace of its own, so the person's are not littered with lookups. That workspace is found by its label, or opened with `cwd` when there is none. `Created` names the `pitupitu` workspace, the new tab and its pane; the cloud closes the task with `close_tab`, leaving the other scratch tabs, and herdr closes the workspace with its last tab). A `driver` argument from a protocol 2 cloud is ignored | `Created` |
 | `create_tab` | `workspace`, `cwd?`, `label` | `Created` |
-| `close_workspace` | `workspace` (a tab id, from a scratch `Created`, closes that tab) | `null` |
+| `close_workspace` | `workspace` | `null` |
 | `close_tab` | `tab` | `null` |
 | `start_agent` | `name`, `kind`, `pane`, `accept_trust_prompt`, `timeout_ms?`, `agent_args?` | `AgentInfo` |
 | `prompt` | `agent`, `text` | `AgentInfo` (the state before the agent reacted) |

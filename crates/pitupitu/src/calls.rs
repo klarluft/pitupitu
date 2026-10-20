@@ -176,17 +176,13 @@ pub const SCRATCH_LABEL: &str = "pitupitu";
 /// `pitupitu` workspaces.
 static SCRATCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// herdr's tab ids are `<workspace>:t<n>`; its workspace ids have no `:`.
-fn is_tab(id: &str) -> bool {
-    id.contains(':')
-}
-
 /// A tab for scratch work in the box's `pitupitu` workspace, which is
 /// found by its label (so again after a restart) or opened in `cwd`, the
-/// home folder, when there is none; its first tab is then the task's. The
-/// workspace id in what comes back is the tab's own id, so that
-/// `close_workspace` on it closes this tab and leaves the other scratch
-/// tasks alone.
+/// home folder, when there is none; its first tab is then the task's.
+/// What comes back names the `pitupitu` workspace, the task's tab and its
+/// pane: the cloud closes the task with `close_tab`, which leaves the
+/// other scratch tasks alone (herdr closes the workspace with its last
+/// tab).
 async fn scratch_tab(
     host: &dyn AgentHost,
     cwd: &Path,
@@ -202,14 +198,10 @@ async fn scratch_tab(
         .await?
         .into_iter()
         .find(|w| w.label == SCRATCH_LABEL);
-    let created = match existing {
-        Some(w) => host.create_tab(&w.workspace_id, Some(cwd), label).await?,
-        None => host.create_workspace(cwd, SCRATCH_LABEL).await?,
-    };
-    Ok(Created {
-        workspace_id: WorkspaceId(created.tab_id.0.clone()),
-        ..created
-    })
+    match existing {
+        Some(w) => host.create_tab(&w.workspace_id, Some(cwd), label).await,
+        None => host.create_workspace(cwd, SCRATCH_LABEL).await,
+    }
 }
 
 /// How long the box lets a call run before answering `timeout` itself:
@@ -253,12 +245,7 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         }
         "close_workspace" => {
             let a: Workspace = args(call, a)?;
-            // A scratch task's "workspace" is its tab (see `scratch_tab`).
-            if is_tab(&a.workspace.0) {
-                ok(host.close_tab(&TabId(a.workspace.0)).await?)
-            } else {
-                ok(host.close_workspace(&a.workspace).await?)
-            }
+            ok(host.close_workspace(&a.workspace).await?)
         }
         "close_tab" => {
             let a: Tab = args(call, a)?;
@@ -395,19 +382,19 @@ mod tests {
                 "create_tab w9 trains"
             ]
         );
-        // Each names its own tab, also as its workspace...
-        assert_eq!(first["workspace_id"], "w9:t1");
-        assert_eq!(second["workspace_id"], second["tab_id"]);
+        // Both name the one pitupitu workspace, each its own tab and pane.
+        assert_eq!(first["workspace_id"], "w9");
+        assert_eq!(second["workspace_id"], "w9");
         assert_ne!(first["tab_id"], second["tab_id"]);
-        // ...so closing one closes that tab only.
-        dispatch(&host, "close_workspace", json!({"workspace": "w9:t1"}))
+        assert_ne!(first["root_pane"], second["root_pane"]);
+        // Closing one task is closing its tab; the workspace is closed as such.
+        dispatch(&host, "close_tab", json!({"tab": first["tab_id"]}))
             .await
             .unwrap();
-        dispatch(&host, "close_workspace", json!({"workspace": "w3"}))
+        dispatch(&host, "close_workspace", json!({"workspace": "w9"}))
             .await
             .unwrap();
-        let log = host.log();
-        assert_eq!(log[2..], ["close_tab w9:t1", "close_workspace w3"]);
+        assert_eq!(host.log()[2..], ["close_tab w9:t1", "close_workspace w9"]);
         // A protocol 2 cloud's `driver` hint is ignored.
         dispatch(
             &host,
@@ -440,21 +427,17 @@ mod tests {
         let ours: Vec<_> = ws.iter().filter(|w| w.label == SCRATCH_LABEL).collect();
         assert_eq!(ours.len(), 1, "{ws:?}");
         assert_eq!(a["cwd"], json!(home.path()));
-        dispatch(
-            host,
-            "close_workspace",
-            json!({"workspace": a["workspace_id"]}),
-        )
-        .await
-        .unwrap();
+        assert_eq!(a["workspace_id"], b["workspace_id"]);
+        assert_eq!(a["workspace_id"], json!(ours[0].workspace_id));
+        dispatch(host, "close_tab", json!({"tab": a["tab_id"]}))
+            .await
+            .unwrap();
+        // The other scratch task is left alone...
         assert_eq!(host.list_workspaces().await.unwrap().len(), 1);
-        dispatch(
-            host,
-            "close_workspace",
-            json!({"workspace": b["workspace_id"]}),
-        )
-        .await
-        .unwrap();
+        dispatch(host, "close_tab", json!({"tab": b["tab_id"]}))
+            .await
+            .unwrap();
+        // ...and herdr closes the workspace with its last tab.
         assert!(host.list_workspaces().await.unwrap().is_empty());
     }
 
