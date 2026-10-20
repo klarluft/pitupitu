@@ -6,6 +6,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 const UNIT: &str = "pitupitu.service";
 const LABEL: &str = "chat.pitupitu.box";
@@ -50,6 +51,7 @@ fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
 /// folder when herdr was just installed somewhere that is not on it yet.
 fn env_path() -> String {
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
+    let path = lasting_path(&path, fnm_default_bin().as_deref());
     match crate::herdr_box::find_binary()
         .as_deref()
         .and_then(Path::parent)
@@ -59,6 +61,44 @@ fn env_path() -> String {
         }
         _ => path,
     }
+}
+
+/// `path` without repeats, and with fnm's per-shell folders
+/// (`…/fnm_multishells/<id>/bin`, gone once that shell exits) swapped for
+/// fnm's default Node, so agents installed with npm are still found after
+/// the shell that ran setup is closed.
+fn lasting_path(path: &str, fnm_default: Option<&Path>) -> String {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in std::env::split_paths(path) {
+        let dir = if dir.to_string_lossy().contains("/fnm_multishells/") {
+            match fnm_default {
+                Some(d) => d.to_path_buf(),
+                None => continue,
+            }
+        } else {
+            dir
+        };
+        if !dir.as_os_str().is_empty() && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    std::env::join_paths(out)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// fnm's default Node's `bin`, where it is.
+fn fnm_default_bin() -> Option<PathBuf> {
+    let home = crate::config::home_dir();
+    std::env::var_os("FNM_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([
+            home.join(".local/share/fnm"),
+            home.join("Library/Application Support/fnm"),
+        ])
+        .map(|d| d.join("aliases/default/bin"))
+        .find(|d| d.is_dir())
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<()> {
@@ -172,6 +212,23 @@ fn write(file: &Path, text: &str) -> Result<()> {
     std::fs::write(file, text).with_context(|| format!("writing {}", file.display()))
 }
 
+/// Whether launchd still has the service (`gui/<uid>/<label>`).
+fn launchd_loaded(service: &str) -> bool {
+    Command::new("launchctl")
+        .args(["print", service])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Polls `done` until it holds or `limit` has passed.
+fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() && start.elapsed() < limit {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn uid() -> Result<String> {
     let out = Command::new("id")
         .arg("-u")
@@ -204,11 +261,25 @@ pub fn install(config: &Path) -> Result<Installed> {
             &launchd_plist(&exe, config.as_deref(), &env_path(), &log),
         )?;
         let domain = format!("gui/{}", uid()?);
-        let _ = run("launchctl", &["bootout", &format!("{domain}/{LABEL}")]);
-        run(
-            "launchctl",
-            &["bootstrap", &domain, &file.display().to_string()],
-        )?;
+        let service = format!("{domain}/{LABEL}");
+        let _ = run("launchctl", &["bootout", &service]);
+        // bootout returns while the old job may still be exiting, and a
+        // bootstrap then fails ("Bootstrap failed: 5: Input/output
+        // error"), leaving no service at all: wait for it to be gone (launchd
+        // kills it after 20 s), and try a few times.
+        wait_until(Duration::from_secs(20), || !launchd_loaded(&service));
+        let file_arg = file.display().to_string();
+        let mut tries = 0;
+        loop {
+            match run("launchctl", &["bootstrap", &domain, &file_arg]) {
+                Ok(()) => break,
+                Err(_) if tries < 5 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                Err(e) => return Err(e),
+            }
+        }
         Ok(Installed {
             file,
             logs: format!("tail -f {}", log.display()),
@@ -407,5 +478,20 @@ mod tests {
             homebrew_opt(Path::new("/home/me/.local/bin/pitupitu")),
             None
         );
+    }
+
+    #[test]
+    fn the_service_path_outlives_the_installing_shell() {
+        let shell = "/Users/me/.local/bin:/Users/me/.local/state/fnm_multishells/2653_1792/bin:/opt/homebrew/bin:/usr/bin:/opt/homebrew/bin:/Users/me/.local/state/fnm_multishells/1146_1792/bin:/usr/bin";
+        let fnm = Path::new("/Users/me/Library/Application Support/fnm/aliases/default/bin");
+        assert_eq!(
+            lasting_path(shell, Some(fnm)),
+            "/Users/me/.local/bin:/Users/me/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/bin"
+        );
+        assert_eq!(
+            lasting_path(shell, None),
+            "/Users/me/.local/bin:/opt/homebrew/bin:/usr/bin"
+        );
+        assert_eq!(lasting_path("/usr/bin:/bin", None), "/usr/bin:/bin");
     }
 }

@@ -996,7 +996,13 @@ async fn status(cfg: &Config) -> Result<()> {
                 println!("  newer herdr release {v}: `pitupitu update herdr`");
             }
             if info.restart_needed {
-                println!("  herdr's running server is older than the binary; it runs the new one after a restart");
+                println!(
+                    "  herdr's running server{} is older than the binary; it runs the new one after a restart",
+                    s.server_version
+                        .as_deref()
+                        .map(|v| format!(" ({v})"))
+                        .unwrap_or_default()
+                );
             }
         }
     }

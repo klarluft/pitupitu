@@ -420,13 +420,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let home = tempfile::tempdir().unwrap();
-        let args = |label: &str| json!({"cwd": home.path(), "label": label, "scratch": true});
+        // herdr reports the resolved path (macOS: /var is /private/var).
+        let home_path = home.path().canonicalize().unwrap();
+        let args = |label: &str| json!({"cwd": home_path, "label": label, "scratch": true});
         let a = dispatch(host, "create_workspace", args("a")).await.unwrap();
         let b = dispatch(host, "create_workspace", args("b")).await.unwrap();
         let ws = host.list_workspaces().await.unwrap();
         let ours: Vec<_> = ws.iter().filter(|w| w.label == SCRATCH_LABEL).collect();
         assert_eq!(ours.len(), 1, "{ws:?}");
-        assert_eq!(a["cwd"], json!(home.path()));
+        assert_eq!(a["cwd"], json!(home_path));
         assert_eq!(a["workspace_id"], b["workspace_id"]);
         assert_eq!(a["workspace_id"], json!(ours[0].workspace_id));
         dispatch(host, "close_tab", json!({"tab": a["tab_id"]}))
