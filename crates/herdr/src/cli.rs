@@ -574,13 +574,19 @@ mod prompt_tests {
     /// with `screen`, `agent prompt` with an agent.
     fn fake_herdr(screen: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // Tests run in parallel and macOS clocks tick in microseconds, so
+        // the time alone gave two tests one folder; the counter keeps
+        // them apart.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "pitupitu-herdr-test-{}-{}",
+            "pitupitu-herdr-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("log");
