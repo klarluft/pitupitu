@@ -159,9 +159,24 @@ async fn scenario(host: &dyn AgentHost, cwd: &Path, name: &str, s: Script<'_>) {
     }
 }
 
-/// `PITUPITU_LIVE_HERDR=1 cargo test --test conformance`: a running herdr
-/// and a signed-in Claude Code on this machine. It opens its own
-/// workspace in a temporary folder and closes it.
+/// A throwaway herdr session, stopped and deleted on drop: the scenario
+/// never runs in the person's own herdr.
+struct Scratch(String);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let herdr = |args: &[&str]| {
+            let _ = std::process::Command::new("herdr").args(args).output();
+        };
+        herdr(&["--session", &self.0, "server", "stop"]);
+        herdr(&["session", "delete", &self.0]);
+    }
+}
+
+/// `PITUPITU_LIVE_HERDR=1 cargo test --test conformance`: herdr and a
+/// signed-in Claude Code on this machine. It starts a herdr server in a
+/// throwaway session, works in a temporary folder, and stops and deletes
+/// the session afterwards.
 #[tokio::test]
 async fn herdr_passes_the_scenario() {
     if std::env::var("PITUPITU_LIVE_HERDR").is_err() {
@@ -169,8 +184,15 @@ async fn herdr_passes_the_scenario() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let host = HerdrCli::new();
-    host.version().await.expect("herdr answers");
+    let session = format!("pitutest-conf-{}", std::process::id());
+    let _scratch = Scratch(session.clone());
+    let host = HerdrCli::new().with_session(&session);
+    host.start_server().expect("herdr runs");
+    let end = Instant::now() + Duration::from_secs(15);
+    while host.list_agents().await.is_err() {
+        assert!(Instant::now() < end, "herdr's server never answered");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let name = format!("conf-{}", std::process::id());
     scenario(
         &host,
