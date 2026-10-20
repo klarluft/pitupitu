@@ -1,6 +1,7 @@
 //! `pitupitu update` end to end against a stand-in release server: the
 //! redirect that names the newest version, the archive and its checksum,
-//! the atomic replacement of the binary. Nothing is restarted.
+//! the atomic replacement of the binary; and `pitupitu update herdr`
+//! against a stand-in `herdr`. Nothing is restarted.
 
 use axum::response::Redirect;
 use axum::routing::get;
@@ -75,12 +76,23 @@ async fn serve(archive: Vec<u8>, sum: String, bad_sum: bool) -> String {
 /// nothing of the person's reachable: no herdr. Run
 /// asynchronously so the stand-in server on this runtime keeps serving.
 async fn run(exe: &PathBuf, url: &str, args: &[&str]) -> (bool, String) {
+    run_with(exe, url, "/nonexistent/herdr", args).await
+}
+
+async fn run_with(exe: &PathBuf, url: &str, herdr: &str, args: &[&str]) -> (bool, String) {
     let mut tries = 0;
     let out = loop {
         let spawned = tokio::process::Command::new(exe)
             .args(args)
             .env("PITUPITU_RELEASES_URL", url)
-            .env("HERDR_BIN", "/nonexistent/herdr")
+            .env("PITUPITU_HERDR_RELEASES_URL", url)
+            .env("HERDR_BIN", herdr)
+            // A stand-in herdr counts as installed by herdr's installer.
+            .env(
+                "HERDR_INSTALL_DIR",
+                std::path::Path::new(herdr).parent().unwrap(),
+            )
+            .env_remove("PITUPITU_HERDR_SESSION")
             .stdin(std::process::Stdio::null())
             .output()
             .await;
@@ -149,4 +161,84 @@ async fn a_bad_checksum_installs_nothing() {
     assert!(text.contains("checksum"), "{text}");
     let (ok, text) = run(&exe, &url, &["--version"]).await;
     assert!(ok && text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+}
+
+/// A stand-in `herdr` installed by its installer (its folder is
+/// `$HERDR_INSTALL_DIR`): `status --json` from its state files, `update`
+/// moves it to 9.9.9 and leaves the running server stale unless it hands
+/// off.
+fn fake_herdr(dir: &std::path::Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("herdr");
+    std::fs::write(dir.join("version"), "0.9.3\n").unwrap();
+    std::fs::write(
+        &bin,
+        r#"#!/bin/sh
+d="$(dirname "$0")"
+v="$(cat "$d/version")"
+r="$(cat "$d/restart" 2>/dev/null || echo false)"
+case "$1" in
+  status) printf '{"client":{"version":"%s","protocol":22,"binary":"%s"},"server":{"running":true},"update":{"restart_needed":%s}}\n' "$v" "$0" "$r" ;;
+  update) echo 9.9.9 > "$d/version"
+          if [ "$2" = "--handoff" ]; then echo false > "$d/restart"; else echo true > "$d/restart"; fi
+          echo "herdr updated to 9.9.9" ;;
+  agent) echo '{"id":"x","result":{"agents":[]}}' ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[tokio::test]
+async fn herdr_is_updated_with_its_own_updater_and_says_when_it_needs_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (archive, sum) = release(&dir.path().join("release"));
+    let url = serve(archive, sum, false).await;
+    let exe = dir.path().join("pitupitu");
+    std::fs::copy(env!("CARGO_BIN_EXE_pitupitu"), &exe).unwrap();
+    let herdr_dir = dir.path().join("herdr-bin");
+    std::fs::create_dir_all(&herdr_dir).unwrap();
+    let herdr = fake_herdr(&herdr_dir);
+    let herdr = herdr.to_str().unwrap();
+
+    let (ok, text) = run_with(&exe, &url, herdr, &["--json", "update", "herdr", "--check"]).await;
+    assert!(ok, "{text}");
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(v["current"], "0.9.3");
+    assert_eq!(v["latest"], "9.9.9");
+    assert_eq!(v["update_available"], true);
+    assert_eq!(v["install"], "installer");
+
+    // No terminal, no --yes: nothing.
+    let (ok, text) = run_with(&exe, &url, herdr, &["update", "herdr"]).await;
+    assert!(!ok && text.contains("--yes"), "{text}");
+
+    let (ok, text) = run_with(&exe, &url, herdr, &["--json", "update", "herdr", "--yes"]).await;
+    assert!(ok, "{text}");
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"what": "herdr", "from": "0.9.3", "to": "9.9.9",
+            "install": "installer", "restart": "needed"})
+    );
+
+    // Now the newest: nothing to do.
+    let (ok, text) = run_with(&exe, &url, herdr, &["update", "herdr", "--yes"]).await;
+    assert!(ok && text.contains("newest"), "{text}");
+
+    // With a handoff the server restarts on the new version.
+    std::fs::write(herdr_dir.join("version"), "0.9.3\n").unwrap();
+    let (ok, text) = run_with(
+        &exe,
+        &url,
+        herdr,
+        &["--json", "update", "herdr", "--yes", "--handoff"],
+    )
+    .await;
+    assert!(ok, "{text}");
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(v["restart"], "done");
 }

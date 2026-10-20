@@ -62,10 +62,17 @@ enum Cmd {
     Status,
     /// Stop and remove the user service. The config and home folder stay.
     Uninstall,
-    /// Update this box agent: shows the newer version and what is running,
-    /// asks, then replaces the binary and restarts the box agent. Running
-    /// sessions are not touched.
+    /// Update this box agent (the default), herdr, or both: shows the
+    /// newer version and what is running, asks, then installs it the way
+    /// it was installed. Running sessions are not touched.
     Update {
+        /// box (this box agent), herdr, or all.
+        #[arg(default_value = "box", value_parser = clap::builder::PossibleValuesParser::new(["box", "herdr", "all"]))]
+        what: String,
+        /// herdr: restart its server on the new version, keeping the
+        /// sessions (best effort). Without it the server keeps running as it is.
+        #[arg(long)]
+        handoff: bool,
         /// Update without asking (needed when there is no terminal).
         #[arg(long)]
         yes: bool,
@@ -237,10 +244,22 @@ async fn main() -> Result<()> {
         Cmd::Connect => connect(&Config::load(&path)?).await,
         Cmd::Status => status(&Config::load(&path)?).await,
         Cmd::Update {
+            what,
+            handoff,
             yes,
             check,
             no_restart,
-        } => update_cmd(yes, check, no_restart, as_json).await,
+        } => {
+            update_cmd(UpdateArgs {
+                what,
+                handoff,
+                yes,
+                check,
+                no_restart,
+                as_json,
+            })
+            .await
+        }
         Cmd::Uninstall => {
             match service::uninstall()? {
                 Some(file) => eprintln!("removed {}", file.display()),
@@ -568,76 +587,259 @@ async fn setup(
     Ok(())
 }
 
-/// `pitupitu update`: never silent, never unasked. What would change and
-/// what is running are shown first; the person says yes every time.
-async fn update_cmd(yes: bool, check: bool, no_restart: bool, as_json: bool) -> Result<()> {
-    let current = update::current();
-    let latest = update::latest()
-        .await
-        .map_err(|e| anyhow::anyhow!("could not check for a newer version: {e:#}"))?;
-    let newer = update::is_newer(&latest, current);
-    if as_json && check {
-        println!(
-            "{}",
-            json!({"current": current, "latest": latest, "update_available": newer})
+/// What `pitupitu update` was asked for.
+struct UpdateArgs {
+    what: String,
+    handoff: bool,
+    yes: bool,
+    check: bool,
+    no_restart: bool,
+    as_json: bool,
+}
+
+/// `pitupitu update [box|herdr|all]`: never silent, never unasked. What
+/// would change and what is running are shown first; the person says yes
+/// every time (or `--yes` for a script).
+async fn update_cmd(a: UpdateArgs) -> Result<()> {
+    let mut out = serde_json::Map::new();
+    let mut failed = None;
+    // herdr first: the box agent's own update ends with its restart.
+    if a.what == "herdr" || a.what == "all" {
+        match update_herdr(&a).await {
+            Ok(v) => {
+                out.insert("herdr".into(), v);
+            }
+            Err(e) => failed = Some(e),
+        }
+    }
+    if a.what == "box" || a.what == "all" {
+        match update_box(&a).await {
+            Ok(v) => {
+                out.insert("box".into(), v);
+            }
+            Err(e) => failed = failed.or(Some(e)),
+        }
+    }
+    if a.as_json {
+        let v = match (a.what.as_str(), out.len()) {
+            ("all", _) | (_, 0) => Value::Object(out),
+            _ => out.into_iter().next().map(|(_, v)| v).unwrap_or_default(),
+        };
+        println!("{v}");
+    }
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Text for a person; nothing when `--json` is printing instead.
+macro_rules! say {
+    ($a:expr, $($t:tt)*) => {
+        if !$a.as_json {
+            println!($($t)*);
+        }
+    };
+}
+
+/// The answer to "update now?", or `--yes`. Without a terminal and
+/// without `--yes`, nothing is updated.
+fn confirmed(a: &UpdateArgs, cmd: &str) -> Result<bool> {
+    if a.yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("no terminal to ask on; run `{cmd} --yes` to update without asking");
+    }
+    let answer = ask("update now? y/n", "n");
+    if answer.to_lowercase().starts_with('y') {
+        Ok(true)
+    } else {
+        eprintln!("not updated");
+        Ok(false)
+    }
+}
+
+/// The sessions in herdr right now, one line each, for the question.
+async fn running_in_herdr(a: &UpdateArgs) {
+    use herdr::AgentHost;
+    let agents = HerdrCli::new().list_agents().await.unwrap_or_default();
+    say!(
+        a,
+        "running now: {} session{} in herdr",
+        agents.len(),
+        if agents.len() == 1 { "" } else { "s" }
+    );
+    for ag in agents.iter().take(10) {
+        say!(
+            a,
+            "  {} ({}, {}) in {}",
+            ag.target(),
+            ag.agent,
+            ag.agent_status,
+            ag.cwd.display()
         );
-        return Ok(());
+    }
+}
+
+async fn update_box(a: &UpdateArgs) -> Result<Value> {
+    let c = update::check_box()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let newer = c.newer();
+    if a.check {
+        if newer {
+            say!(a, "pitupitu {} -> {}", c.current, c.latest);
+            say!(a, "release notes: {}", update::notes_url(&c.latest));
+            say!(a, "run `pitupitu update` to install it");
+        } else {
+            say!(a, "pitupitu {} is the newest release", c.current);
+        }
+        return Ok(
+            json!({"current": c.current, "latest": c.latest, "update_available": newer, "install": c.install}),
+        );
     }
     if !newer {
-        println!("pitupitu {current} is the newest release");
-        return Ok(());
+        say!(a, "pitupitu {} is the newest release", c.current);
+        return Ok(json!({"what": "box", "current": c.current, "nothing_to_update": true}));
     }
-    println!("pitupitu {current} -> {latest}");
-    println!("release notes: {}", update::notes_url(&latest));
-    if check {
-        println!("run `pitupitu update` to install it");
-        return Ok(());
+    say!(a, "pitupitu {} -> {}", c.current, c.latest);
+    say!(a, "release notes: {}", update::notes_url(&c.latest));
+    say!(a, "binary: {}", c.exe.display());
+    if c.install == "brew" {
+        say!(
+            a,
+            "installed with Homebrew: updated with `brew upgrade pitupitu`"
+        );
     }
-    let exe = std::env::current_exe()?;
-    println!("binary: {}", exe.display());
-    if exe.components().any(|c| c.as_os_str() == "Cellar") {
-        println!("installed with Homebrew: run `brew upgrade pitupitu` instead");
-        return Ok(());
-    }
-    let in_herdr = {
-        use herdr::AgentHost;
-        HerdrCli::new()
-            .list_agents()
-            .await
-            .map(|l| l.len())
-            .unwrap_or(0)
-    };
-    println!(
-        "running now: {in_herdr} session{} in herdr",
-        if in_herdr == 1 { "" } else { "s" }
-    );
-    println!(
+    running_in_herdr(a).await;
+    say!(
+        a,
         "they keep running: herdr is a separate program; only the box agent restarts, and its \
          link to pitupitu cloud drops for a few seconds"
     );
-    if !yes {
-        if !std::io::stdin().is_terminal() {
-            bail!("no terminal to ask on; run `pitupitu update --yes` to update without asking");
-        }
-        let answer = ask("update now? y/n", "n");
-        if !answer.to_lowercase().starts_with('y') {
-            eprintln!("not updated");
-            return Ok(());
-        }
+    if !confirmed(a, "pitupitu update")? {
+        return Ok(json!({"what": "box", "updated": false}));
     }
-    let (dir, binary) = update::download(&latest).await?;
-    let installed = update::install(&binary, &exe);
-    let _ = std::fs::remove_dir_all(&dir);
-    installed?;
-    println!("installed pitupitu {latest} at {}", exe.display());
-    if no_restart {
-        println!("restart `pitupitu connect` (or the service) to run it");
-    } else if service::restart()? {
-        println!("box agent restarted; sessions untouched");
+    let mut done = update::apply_box(&c)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if c.install == "brew" {
+        say!(a, "upgraded pitupitu to {} with Homebrew", done.to);
     } else {
-        println!("no service installed; restart `pitupitu connect` yourself");
+        say!(a, "installed pitupitu {} at {}", done.to, c.exe.display());
     }
-    Ok(())
+    if a.no_restart {
+        done.restart = "needed";
+        say!(a, "restart `pitupitu connect` (or the service) to run it");
+    } else if service::restart()? {
+        say!(a, "box agent restarted; sessions untouched");
+    } else {
+        done.restart = "needed";
+        say!(
+            a,
+            "no service installed; restart `pitupitu connect` yourself"
+        );
+    }
+    Ok(serde_json::to_value(done)?)
+}
+
+async fn update_herdr(a: &UpdateArgs) -> Result<Value> {
+    let cli = HerdrCli::new();
+    let c = herdr_box::check(&cli)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let current = c.status.version.clone();
+    let newest = c.newest.clone().unwrap_or_else(|| "?".into());
+    let newer = c.newer();
+    if a.check {
+        if newer {
+            say!(a, "herdr {current} -> {newest}");
+            say!(a, "run `pitupitu update herdr` to install it");
+        } else {
+            say!(a, "herdr {current} is the newest release");
+        }
+        if c.status.restart_needed {
+            say!(
+                a,
+                "herdr's running server is older than the binary and waits for a restart"
+            );
+        }
+        return Ok(
+            json!({"current": current, "latest": c.newest, "update_available": newer,
+            "install": c.install, "running": c.status.running,
+            "restart_needed": c.status.restart_needed}),
+        );
+    }
+    if !newer {
+        say!(a, "herdr {current} is the newest release");
+        return Ok(json!({"what": "herdr", "current": current, "nothing_to_update": true}));
+    }
+    say!(a, "herdr {current} -> {newest}");
+    say!(
+        a,
+        "release notes: https://github.com/{}/releases",
+        update::HERDR_REPO
+    );
+    if let Some(b) = &c.status.binary {
+        say!(a, "binary: {}", b.display());
+    }
+    match c.install {
+        "brew" => {
+            say!(
+                a,
+                "installed with Homebrew: updated with `brew upgrade herdr`"
+            );
+            if a.handoff {
+                say!(
+                    a,
+                    "--handoff is for herdr's own updater; Homebrew leaves the server as it is"
+                );
+            }
+        }
+        "installer" => say!(a, "updated with herdr's own `herdr update`"),
+        _ => bail!(
+            "herdr at {} was installed some other way (mise, Nix, a build of your own); \
+             update it that way",
+            c.status
+                .binary
+                .as_deref()
+                .map_or("an unknown path".into(), |b| b.display().to_string())
+        ),
+    }
+    running_in_herdr(a).await;
+    if a.handoff && c.install == "installer" {
+        say!(
+            a,
+            "with --handoff herdr's server restarts on the new version, keeping your sessions \
+             (best effort)"
+        );
+    } else {
+        say!(
+            a,
+            "they keep running: the running server stays as it is and picks up the new version \
+             when it next restarts"
+        );
+    }
+    if !confirmed(a, "pitupitu update herdr")? {
+        return Ok(json!({"what": "herdr", "updated": false}));
+    }
+    let done = herdr_box::apply(&cli, &c, a.handoff)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    say!(a, "updated herdr {} -> {}", done.from, done.to);
+    match done.restart {
+        "needed" => say!(
+            a,
+            "herdr's running server is still {}: it keeps working and runs {} after it restarts \
+             (quit herdr and open it again, or `herdr update --handoff` next time)",
+            done.from,
+            done.to
+        ),
+        "done" => say!(a, "herdr's server restarted on {}", done.to),
+        _ => {}
+    }
+    Ok(serde_json::to_value(done)?)
 }
 
 async fn status(cfg: &Config) -> Result<()> {
@@ -658,11 +860,43 @@ async fn status(cfg: &Config) -> Result<()> {
         files.len(),
         if files.len() == 1 { "" } else { "s" }
     );
-    let herdr = HerdrCli::new()
-        .version()
-        .await
-        .unwrap_or_else(|e| format!("not found ({e})"));
-    println!("herdr: {herdr}");
+    let cli = HerdrCli::new();
+    let (herdr, newest_herdr, newer_box) = tokio::join!(
+        herdr_box::status(&cli),
+        update::herdr_newest(),
+        update::newer()
+    );
+    match herdr {
+        None => println!(
+            "herdr: not installed; pitupitu runs your agents in herdr (`pitupitu setup` installs it)"
+        ),
+        Some(s) => {
+            let info = herdr_box::HerdrInfo::new(&s, s.running, newest_herdr.as_deref());
+            println!(
+                "herdr: {}{}, server {}, installed with {}",
+                info.version,
+                info.protocol
+                    .map(|p| format!(" (protocol {p})"))
+                    .unwrap_or_default(),
+                if info.running {
+                    "running"
+                } else {
+                    "not running (the box agent starts it)"
+                },
+                match info.install {
+                    "brew" => "Homebrew",
+                    "installer" => "herdr's installer",
+                    _ => "something else",
+                }
+            );
+            if let Some(v) = &info.latest {
+                println!("  newer herdr release {v}: `pitupitu update herdr`");
+            }
+            if info.restart_needed {
+                println!("  herdr's running server is older than the binary; it runs the new one after a restart");
+            }
+        }
+    }
     let agents = inventory::available().await;
     println!(
         "agents: {}",
@@ -679,7 +913,7 @@ async fn status(cfg: &Config) -> Result<()> {
     let recent = inventory::recent(&config::home_dir());
     println!("recent project folders: {}", recent.len());
     println!("service: {}", service::status());
-    match update::newer().await {
+    match newer_box {
         Some(v) => println!(
             "version: {} (newer release {v}: `pitupitu update`)",
             update::current()
