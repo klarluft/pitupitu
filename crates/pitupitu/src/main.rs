@@ -1,8 +1,10 @@
-//! `pitupitu`, the box agent: it links this machine to pitupitu cloud,
-//! where the conversation happens. `setup` signs the box in, makes the home
-//! folder and installs the user service; `connect` is what the service
-//! runs; `prefs`, `box`, `default` and `settings` change the account's
-//! settings; `--skill` teaches the person's agents all of this.
+//! `pitupitu`, the box agent: it links this machine's agents, running in
+//! herdr, to pitupitu cloud, where the conversation happens. `setup` signs
+//! the box in, makes the home folder, installs herdr when it is missing and
+//! installs the user service; `connect` is what the service runs; `update`
+//! updates the box agent or herdr when the person asks; `prefs`, `box`,
+//! `default` and `settings` change the account's settings; `--skill`
+//! teaches the person's agents all of this.
 
 use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -66,9 +68,9 @@ enum Cmd {
     },
     /// Hold the link to pitupitu cloud open (what the service runs).
     Connect,
-    /// The account, the home folder and the service, as this box sees them.
+    /// The account, the home folder, herdr and the service, as this box sees them.
     Status,
-    /// Stop and remove the user service. The config and home folder stay.
+    /// Stop and remove the user service. The config, home folder and herdr stay.
     Uninstall,
     /// Update this box agent (the default), herdr, or both: shows the
     /// newer version and what is running, asks, then installs it the way

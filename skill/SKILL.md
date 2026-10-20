@@ -5,13 +5,13 @@ description: Install, sign in and configure pitupitu, the voice app that lets a 
 
 # pitupitu
 
-pitupitu lets the person talk (on https://pitupitu.chat, phone or desktop) to a voice foreman that starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents it starts are the person's own `claude` and `codex`, signed in by the person; pitupitu never handles their credentials, and neither should you.
+pitupitu lets the person talk (on https://pitupitu.chat, phone or desktop) to a voice foreman that starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents run in herdr (a terminal workspace manager for coding agents): the person opens `herdr` on that machine to see the same sessions their phone sees. The agents are the person's own `claude`, `codex` and others, signed in by the person; pitupitu never handles their credentials, and neither should you.
 
 ## Install and link this machine
 
-1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin` and runs setup when there is a terminal; without one, run step 2 yourself. Where Homebrew is the person's way of installing tools, `brew install klarluft/tap/pitupitu` instead, then step 2.
+1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin`, installs herdr when it is missing, and runs setup when there is a terminal; without one, run step 2 yourself. Where Homebrew is the person's way of installing tools, `brew install klarluft/tap/pitupitu` instead, then step 2.
 2. Link: `pitupitu setup --home ~/pitupitu`. It prints a short code and a URL. **The person must approve the code themselves** in their browser while signed in to pitupitu.chat: show them the code and URL and wait. Never try to approve it for them. `--box <name>` sets how this machine is named (default: its hostname); `--no-browser` only prints the URL.
-3. Setup installs a user service that keeps the link open. Check with `pitupitu status`.
+3. Setup installs herdr if it is still missing and herdr's integrations for the agents it finds, then a user service that keeps the link open. On Linux it asks once about lingering (keeping it running with nobody logged in); without a terminal pass `--linger` or `--no-linger` only if the person said which. Check with `pitupitu status`.
 
 If the person's agents are not logged in yet, tell them to run `claude` (or `codex`) once and log in. Do not do it for them and do not touch credential files.
 
@@ -19,11 +19,10 @@ If the person's agents are not logged in yet, tell them to run `claude` (or `cod
 
 Every command takes `--json` and never prompts when there is no terminal.
 
-- `pitupitu settings`: everything at once (preferences, default machine, voice, every machine with its note and driver).
+- `pitupitu settings`: everything at once (preferences, default machine, voice, every machine with its note and agent).
 - `pitupitu prefs` / `pitupitu prefs show`: the preferences, the text the voice foreman reads in every conversation: who the person is, what runs where, how they like to work. Keep it short, one fact per line.
 - `pitupitu prefs set <file>` (or `-` for stdin), `pitupitu prefs clear`. `pitupitu prefs edit` opens an editor (a person at a terminal only).
 - `pitupitu box note "<one line>"`: describe this machine ("client work, Acme"). `pitupitu box note --clear`.
-- `pitupitu box driver auto|herdr|terminal`: what runs agent sessions here. `auto` (default) uses herdr when it runs.
 - `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.
@@ -36,8 +35,8 @@ Change preferences by reading them first (`pitupitu prefs --json`), editing the 
 
 ## Updating
 
-`pitupitu update --check` says whether a newer release exists (`--json` for `{"current","latest","update_available"}`). `pitupitu update` installs it: it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking. Sessions keep running through an update; only the box agent restarts.
+`pitupitu update --check` says whether a newer release of the box agent exists (`--json` for `{"current","latest","update_available"}`); `pitupitu update herdr --check` the same for herdr, `pitupitu update all --check` for both. `pitupitu update [herdr|all]` installs it the way it was installed (Homebrew, or the installer): it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking, and `--handoff` (restart herdr's server on the new version now) only when they asked for that. Sessions keep running through an update: only the box agent restarts, and herdr's running server stays as it is unless handed off.
 
 ## Not here
 
-The conversation, voice, minutes and billing are on https://pitupitu.chat (the page, and `/app/account`). Removing the service: `pitupitu uninstall`.
+The conversation, voice, minutes and billing are on https://pitupitu.chat (the page, and `/app/account`). Removing the service: `pitupitu uninstall` (herdr stays). Driving herdr itself (its panes and agents) is herdr's own skill, `herdr --skill`, not this one.
