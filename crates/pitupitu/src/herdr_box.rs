@@ -62,14 +62,17 @@ pub fn install_kind(binary: Option<&Path>) -> &'static str {
     if update::is_brew(binary) {
         return "brew";
     }
+    // Everything compared as the real path: on macOS a temporary or home
+    // folder is often reached through a symlink (`/var` is `/private/var`).
+    let real_path = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     let home = crate::config::home_dir();
-    let mut dirs = vec![home.join(".local/bin")];
+    let mut dirs = vec![real_path(home.join(".local/bin"))];
     if let Some(d) = std::env::var_os("HERDR_INSTALL_DIR") {
-        dirs.push(PathBuf::from(d));
+        dirs.push(real_path(PathBuf::from(d)));
     }
-    let real = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    let real = real_path(binary.to_path_buf());
     let dir = real.parent().unwrap_or(Path::new(""));
-    if dirs.iter().any(|d| d == dir) || real.starts_with(home.join(".herdr")) {
+    if dirs.iter().any(|d| d == dir) || real.starts_with(real_path(home.join(".herdr"))) {
         "installer"
     } else {
         "other"
