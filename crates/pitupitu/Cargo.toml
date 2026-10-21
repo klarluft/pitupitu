@@ -13,6 +13,8 @@ clap.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
 herdr = { path = "../herdr", package = "pitupitu-herdr" }
+# Only the encoder: no image, SVG or PIC output, no dependencies of its own.
+qrcode = { version = "0.14", default-features = false }
 rand.workspace = true
 regex = "1"
 reqwest.workspace = true
