@@ -43,6 +43,17 @@ pub fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Where the box keeps what it needs between runs and nothing else (the
+/// session reader's place in each log): `$XDG_STATE_HOME/pitupitu`
+/// (`~/.local/state/pitupitu`) on Linux, `~/Library/Application
+/// Support/pitupitu` on macOS.
+pub fn state_dir() -> PathBuf {
+    dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| home_dir().join(".local/state"))
+        .join("pitupitu")
+}
+
 /// `~/pitupitu`, the home folder setup offers.
 pub fn default_home() -> PathBuf {
     home_dir().join("pitupitu")

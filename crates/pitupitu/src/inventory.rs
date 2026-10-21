@@ -1,4 +1,4 @@
-//! What this box has, for the cloud (box link protocol 3): how the box
+//! What this box has, for the cloud (box link protocol 4): how the box
 //! agent and herdr were installed and whether newer releases exist, the
 //! kinds herdr can start, which agent CLIs are on `PATH`, and the project
 //! folders agents worked in recently.
@@ -80,21 +80,7 @@ pub async fn available() -> Vec<Available> {
 /// Recent project folders from the agents' session history under `home`
 /// (the user's home directory), newest first, folders that still exist.
 pub fn recent(home: &Path) -> Vec<Recent> {
-    let mut files: Vec<(SystemTime, PathBuf, &str)> = Vec::new();
-    // Claude Code: one folder per project, one file per session.
-    if let Ok(projects) = std::fs::read_dir(home.join(".claude/projects")) {
-        for dir in projects.flatten() {
-            if let Ok(sessions) = std::fs::read_dir(dir.path()) {
-                for f in sessions.flatten() {
-                    push_jsonl(&mut files, f.path(), "claude");
-                }
-            }
-        }
-    }
-    // Codex: sessions/YYYY/MM/DD/rollout-….jsonl.
-    walk(&home.join(".codex/sessions"), 4, &mut |p| {
-        push_jsonl(&mut files, p, "codex")
-    });
+    let mut files = session_files(home);
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     files.truncate(FILES_MAX);
 
@@ -119,12 +105,35 @@ pub fn recent(home: &Path) -> Vec<Recent> {
     out
 }
 
+/// Every session file of both agents with when it was last written:
+/// Claude Code's `~/.claude/projects/*/*.jsonl` (one per session; the
+/// subagents' files one level further down are not among them) and
+/// Codex's `~/.codex/sessions/YYYY/MM/DD/*.jsonl`. Nothing is opened.
+pub(crate) fn session_files(home: &Path) -> Vec<(SystemTime, PathBuf, &'static str)> {
+    let mut files: Vec<(SystemTime, PathBuf, &str)> = Vec::new();
+    // Claude Code: one folder per project, one file per session.
+    if let Ok(projects) = std::fs::read_dir(home.join(".claude/projects")) {
+        for dir in projects.flatten() {
+            if let Ok(sessions) = std::fs::read_dir(dir.path()) {
+                for f in sessions.flatten() {
+                    push_jsonl(&mut files, f.path(), "claude");
+                }
+            }
+        }
+    }
+    // Codex: sessions/YYYY/MM/DD/rollout-….jsonl.
+    walk(&home.join(".codex/sessions"), 4, &mut |p| {
+        push_jsonl(&mut files, p, "codex")
+    });
+    files
+}
+
 fn push_jsonl(
     files: &mut Vec<(SystemTime, PathBuf, &'static str)>,
     p: PathBuf,
     agent: &'static str,
 ) {
-    if p.extension().is_some_and(|x| x == "jsonl") {
+    if p.extension().is_some_and(|x| x == "jsonl") && p.is_file() {
         if let Ok(m) = p.metadata().and_then(|m| m.modified()) {
             files.push((m, p, agent));
         }
@@ -169,7 +178,7 @@ fn session_cwd(file: &Path) -> Option<PathBuf> {
 }
 
 /// A time as `YYYY-MM-DDTHH:MM:SSZ`, without a date crate.
-fn rfc3339(t: SystemTime) -> String {
+pub(crate) fn rfc3339(t: SystemTime) -> String {
     let secs = t
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

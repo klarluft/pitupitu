@@ -5,6 +5,7 @@ pub mod calls;
 pub mod config;
 pub mod device;
 pub mod herdr_box;
+pub mod history;
 pub mod home;
 pub mod inventory;
 pub mod link;

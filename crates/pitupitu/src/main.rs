@@ -98,7 +98,7 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PrefsCmd>,
     },
-    /// This box's name, note, agent and on/off.
+    /// This box's name, note, agent, on/off and history.
     #[command(name = "box")]
     Box {
         #[command(subcommand)]
@@ -183,6 +183,13 @@ enum BoxCmd {
     Agent {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
+    },
+    /// Let pitupitu read what your agents did on this box (your
+    /// prompts, their replies, which files and commands they touched,
+    /// commits) so it can summarise your work. Off by default.
+    History {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(["on", "off"]))]
+        state: String,
     },
     /// Rename this box: what you call it when you talk ("on the mac, …").
     Rename {
@@ -346,6 +353,19 @@ async fn main() -> Result<()> {
                 BoxCmd::On => json!({"enabled": true}),
                 BoxCmd::Off => json!({"enabled": false}),
                 BoxCmd::Agent { name } => json!({"agent": settings::agent_or_null(&name)}),
+                BoxCmd::History { state } => {
+                    let on = state == "on";
+                    let s = settings::patch(&cfg, json!({"history": on})).await?;
+                    let said = if on {
+                        format!("history on. {}", settings::HISTORY_SAYS)
+                    } else {
+                        "history off: nothing more is read or sent from this box; what pitupitu \
+                         already stored can be deleted on pitupitu.chat"
+                            .to_string()
+                    };
+                    done(&s, as_json, &said);
+                    return Ok(());
+                }
                 BoxCmd::Rename { .. } => unreachable!("handled above"),
             };
             let s = settings::patch(&cfg, change).await?;
@@ -470,6 +490,7 @@ async fn connect(cfg: &Config) -> Result<()> {
         keeper: Some(keeper),
         available,
         history: Some(config::home_dir()),
+        state_dir: config::state_dir(),
         ping_timeout: link::PING_TIMEOUT,
         updates: true,
         releases: Default::default(),
@@ -628,10 +649,13 @@ async fn setup(
         }
     }
 
-    // 4. herdr, which runs the agents.
+    // 4. History, asked once, no by default.
+    offer_history(path).await?;
+
+    // 5. herdr, which runs the agents.
     setup_herdr().await;
 
-    // 5. The service.
+    // 6. The service.
     if !no_service {
         offer_linger(path, linger)?;
     }
@@ -651,6 +675,39 @@ async fn setup(
         eprintln!();
         eprintln!("  all set; now open https://pitupitu.chat/app on your phone or any browser");
     }
+    Ok(())
+}
+
+/// Whether pitupitu may read what the agents did on this box: asked once,
+/// at a terminal, no by default; without a terminal it stays off and is
+/// only mentioned.
+async fn offer_history(path: &std::path::Path) -> Result<()> {
+    if config::get(path, "setup", "history_offered").is_some() {
+        return Ok(());
+    }
+    eprintln!();
+    if !std::io::stdin().is_terminal() {
+        eprintln!(
+            "  pitupitu can summarise your work from what your agents did here; to allow it, \
+             run: pitupitu box history on"
+        );
+        return Ok(());
+    }
+    eprintln!("  {}", settings::HISTORY_SAYS);
+    let on = ask_yes(
+        "Let pitupitu read what your agents did on this machine?",
+        false,
+    );
+    let cfg = Config::load(path)?;
+    match settings::patch(&cfg, json!({"history": on})).await {
+        Ok(_) if on => eprintln!("  ok, history is on for this machine"),
+        Ok(_) => eprintln!("  ok, it stays off (to turn it on later: pitupitu box history on)"),
+        Err(e) => {
+            eprintln!("  could not save that ({e:#}); you can do it later with: pitupitu box history on|off");
+            return Ok(());
+        }
+    }
+    config::set(path, &[("setup", "history_offered", "yes")])?;
     Ok(())
 }
 

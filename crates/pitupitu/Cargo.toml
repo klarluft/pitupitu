@@ -14,9 +14,11 @@ dirs.workspace = true
 futures-util.workspace = true
 herdr = { path = "../herdr", package = "pitupitu-herdr" }
 rand.workspace = true
+regex = "1"
 reqwest.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# preserve_order: a tool's "first argument" is the first one it was given.
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2 = "0.10"
 tokio.workspace = true
 tokio-tungstenite.workspace = true

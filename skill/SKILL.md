@@ -19,10 +19,11 @@ If the person's agents are not logged in yet, tell them to run `claude` (or `cod
 
 Every command takes `--json` and never prompts when there is no terminal.
 
-- `pitupitu settings`: everything at once (preferences, default machine, voice, every machine with its note and agent).
+- `pitupitu settings`: everything at once (preferences, default machine, voice, every machine with its note, agent and history).
 - `pitupitu prefs` / `pitupitu prefs show`: the preferences, the text the voice foreman reads in every conversation: who the person is, what runs where, how they like to work. Keep it short, one fact per line.
 - `pitupitu prefs set <file>` (or `-` for stdin), `pitupitu prefs clear`. `pitupitu prefs edit` opens an editor (a person at a terminal only).
 - `pitupitu box note "<one line>"`: describe this machine ("client work, Acme"). `pitupitu box note --clear`.
+- `pitupitu box history on|off`: whether pitupitu reads what the person's agents did on this machine (their prompts, the agents' replies, which files and commands were touched, commits; never file contents, command output or keys) to summarise their work. Off by default. Switch it on only when the person asks for it themselves; switching it off is always fine.
 - `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.

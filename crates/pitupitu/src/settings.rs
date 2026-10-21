@@ -2,8 +2,9 @@
 //! `default` and `settings`, over `GET`/`PATCH /v1/settings` with this
 //! box's key. The preferences are what the person tells pitupitu about
 //! themselves and their machines; the voice foreman reads them in every
-//! conversation. `note`, `agent` and on/off (`enabled`) are this box's
-//! own; `updates` is what the foreman brings up between turns unasked.
+//! conversation. `note`, `agent`, on/off (`enabled`) and `history` are
+//! this box's own; `updates` is what the foreman brings up between turns
+//! unasked.
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
@@ -12,6 +13,12 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
+
+/// What switching history on means, said before it is switched on.
+pub const HISTORY_SAYS: &str = "pitupitu will read what your agents did in your projects on this \
+    machine (your prompts, their replies, which files and commands they touched, commits) so it \
+    can summarise your work. It never sends file contents, command output or keys. Turn it off \
+    any time with `pitupitu box history off`; delete what it stored on pitupitu.chat.";
 /// The agents a default can name; `auto` clears it.
 pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
 pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
@@ -145,6 +152,9 @@ pub fn print(settings: &Value, as_json: bool) {
         );
         if let Some(a) = b["agent"].as_str() {
             line.push_str(&format!(", agent {a}"));
+        }
+        if b["history"] == true {
+            line.push_str(", history on");
         }
         if let Some(n) = b["note"].as_str() {
             line.push_str(&format!(" — {n}"));
