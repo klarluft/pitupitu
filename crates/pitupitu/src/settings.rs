@@ -14,11 +14,14 @@ use std::path::Path;
 
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
 
-/// What switching history on means, said before it is switched on.
-pub const HISTORY_SAYS: &str = "pitupitu will read what your agents did in your projects on this \
-    machine (your prompts, their replies, which files and commands they touched, commits) so it \
-    can summarise your work. It never sends file contents, command output or keys. Turn it off \
-    any time with `pitupitu box history off`; delete what it stored on pitupitu.chat.";
+/// What history is, said by `pitupitu setup` and `pitupitu box history on`.
+pub const HISTORY_SAYS: &str = "pitupitu keeps track of your projects by reading what your agents \
+    did on this machine (your prompts, the gist of their replies, which files and commands they \
+    touched, recent commits; never file contents, command output or keys). Details and how to \
+    switch it off: https://pitupitu.chat/privacy";
+/// Said by `pitupitu box history off`.
+pub const HISTORY_OFF_SAYS: &str = "pitupitu will no longer read what your agents did on this \
+    machine; what it already stored is deleted from the app page, What pitupitu knows.";
 /// The agents a default can name; `auto` clears it.
 pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
 pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
@@ -153,8 +156,10 @@ pub fn print(settings: &Value, as_json: bool) {
         if let Some(a) = b["agent"].as_str() {
             line.push_str(&format!(", agent {a}"));
         }
-        if b["history"] == true {
-            line.push_str(", history on");
+        match b["history"].as_bool() {
+            Some(true) => line.push_str(", history on"),
+            Some(false) => line.push_str(", history off"),
+            None => {}
         }
         if let Some(n) = b["note"].as_str() {
             line.push_str(&format!(" — {n}"));

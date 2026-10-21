@@ -184,9 +184,10 @@ enum BoxCmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
     },
-    /// Let pitupitu read what your agents did on this box (your
-    /// prompts, their replies, which files and commands they touched,
-    /// commits) so it can summarise your work. Off by default.
+    /// Whether pitupitu reads what your agents did on this box (your
+    /// prompts, the gist of their replies, which files and commands they
+    /// touched, recent commits) to keep track of your projects. On by
+    /// default.
     History {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(["on", "off"]))]
         state: String,
@@ -357,13 +358,11 @@ async fn main() -> Result<()> {
                     let on = state == "on";
                     let s = settings::patch(&cfg, json!({"history": on})).await?;
                     let said = if on {
-                        format!("history on. {}", settings::HISTORY_SAYS)
+                        settings::HISTORY_SAYS
                     } else {
-                        "history off: nothing more is read or sent from this box; what pitupitu \
-                         already stored can be deleted on pitupitu.chat"
-                            .to_string()
+                        settings::HISTORY_OFF_SAYS
                     };
-                    done(&s, as_json, &said);
+                    done(&s, as_json, said);
                     return Ok(());
                 }
                 BoxCmd::Rename { .. } => unreachable!("handled above"),
@@ -649,8 +648,9 @@ async fn setup(
         }
     }
 
-    // 4. History, asked once, no by default.
-    offer_history(path).await?;
+    // 4. History: on by default, said in one line, not asked.
+    eprintln!();
+    eprintln!("  {}", settings::HISTORY_SAYS);
 
     // 5. herdr, which runs the agents.
     setup_herdr().await;
@@ -675,39 +675,6 @@ async fn setup(
         eprintln!();
         eprintln!("  all set; now open https://pitupitu.chat/app on your phone or any browser");
     }
-    Ok(())
-}
-
-/// Whether pitupitu may read what the agents did on this box: asked once,
-/// at a terminal, no by default; without a terminal it stays off and is
-/// only mentioned.
-async fn offer_history(path: &std::path::Path) -> Result<()> {
-    if config::get(path, "setup", "history_offered").is_some() {
-        return Ok(());
-    }
-    eprintln!();
-    if !std::io::stdin().is_terminal() {
-        eprintln!(
-            "  pitupitu can summarise your work from what your agents did here; to allow it, \
-             run: pitupitu box history on"
-        );
-        return Ok(());
-    }
-    eprintln!("  {}", settings::HISTORY_SAYS);
-    let on = ask_yes(
-        "Let pitupitu read what your agents did on this machine?",
-        false,
-    );
-    let cfg = Config::load(path)?;
-    match settings::patch(&cfg, json!({"history": on})).await {
-        Ok(_) if on => eprintln!("  ok, history is on for this machine"),
-        Ok(_) => eprintln!("  ok, it stays off (to turn it on later: pitupitu box history on)"),
-        Err(e) => {
-            eprintln!("  could not save that ({e:#}); you can do it later with: pitupitu box history on|off");
-            return Ok(());
-        }
-    }
-    config::set(path, &[("setup", "history_offered", "yes")])?;
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 //! Session history (box link protocol 4): what the person's agents did on
 //! this box, read from the agents' own session logs, and the git facts of
-//! the repositories they worked in. Off unless the person switched it on
-//! for this box (`pitupitu box history on`, or on the page); the cloud says
+//! the repositories they worked in. On unless the person switched it off
+//! for this box (`pitupitu box history off`, or on the page); the cloud says
 //! which in its `settings` note and the box keeps nothing about the setting
 //! itself.
 //!
@@ -46,18 +46,23 @@ const GIT_EVERY: Duration = Duration::from_secs(60);
 const GIT_CACHE: Duration = Duration::from_secs(60);
 /// The pause after each note: no more than ten a second.
 const PACE: Duration = Duration::from_millis(100);
-/// Sessions and commits older than this are left alone (30 days).
-const WINDOW: u64 = 30 * 86_400;
+/// Sessions and commits older than this are left alone (7 days).
+const WINDOW: u64 = 7 * 86_400;
 /// At most this many sessions, the newest.
 const SESSIONS_MAX: usize = 300;
 /// A log written this recently (5 minutes) is a live session.
 const LIVE: u64 = 300;
-const TEXT_MAX: usize = 2000;
+/// What the person typed, at most.
+const YOU_MAX: usize = 1000;
+/// What the agent answered, at most.
+const AGENT_MAX: usize = 600;
+/// A commit subject, at most.
+const SUBJECT_MAX: usize = 2000;
 const TARGET_MAX: usize = 120;
 const TITLE_MAX: usize = 80;
-/// One session record, as JSON, at most (64 KB).
-const RECORD_MAX: usize = 64 * 1024;
-const COMMITS_MAX: usize = 100;
+/// One session record, as JSON, at most (32 KB).
+const RECORD_MAX: usize = 32 * 1024;
+const COMMITS_MAX: usize = 50;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 const STATE_FILE: &str = "history.json";
 
@@ -219,13 +224,13 @@ fn cut(s: &str, max: usize) -> String {
     }
 }
 
-/// Text for a turn: redacted, then cut to 2000 characters. A huge paste
+/// Text for a turn: redacted, then cut to `max` characters. A huge paste
 /// is shortened before it is looked at, still well past the cut.
-fn turn_text(s: &str) -> Option<String> {
-    let s = cut(s, TEXT_MAX * 2);
+fn turn_text(s: &str, max: usize) -> Option<String> {
+    let s = cut(s, max * 2);
     let s = redact(s.trim());
     let s = s.trim();
-    (!s.is_empty()).then(|| cut(s, TEXT_MAX))
+    (!s.is_empty()).then(|| cut(s, max))
 }
 
 /// One line, redacted, cut to `max` characters with no `…`.
@@ -520,13 +525,13 @@ impl Parsed {
     }
 
     fn you(&mut self, at: &str, text: Option<String>) {
-        if let Some(t) = text.as_deref().and_then(turn_text) {
+        if let Some(t) = text.as_deref().and_then(|t| turn_text(t, YOU_MAX)) {
             self.push(at, Kind::You { text: t });
         }
     }
 
     fn said(&mut self, at: &str, text: &str) {
-        if let Some(t) = turn_text(text) {
+        if let Some(t) = turn_text(text, AGENT_MAX) {
             self.push(at, Kind::Agent { text: t });
         }
     }
@@ -791,15 +796,15 @@ fn branch(root: &Path) -> Option<String> {
     git_line(root, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD")
 }
 
-/// The commits of the current branch from the last 30 days, newest first,
-/// at most 100: hash, time, subject (redacted), how many files.
+/// The commits of the current branch from the last 7 days, newest first,
+/// at most 50: hash, time, subject (redacted), how many files.
 fn commits(root: &Path, branch: Option<&str>) -> Vec<Commit> {
     let max = format!("--max-count={COMMITS_MAX}");
     let Some(out) = git(
         root,
         &[
             "log",
-            "--since=30.days",
+            "--since=7.days",
             &max,
             "--format=%x1e%H%x1f%cI%x1f%s",
             "--shortstat",
@@ -830,7 +835,7 @@ fn parse_log(out: &str, branch: Option<&str>) -> Vec<Commit> {
             Some(Commit {
                 sha: sha.to_string(),
                 at: at.trim().to_string(),
-                subject: one_line(subject, TEXT_MAX).unwrap_or_default(),
+                subject: one_line(subject, SUBJECT_MAX).unwrap_or_default(),
                 files,
                 branch: branch.map(str::to_string),
             })
@@ -947,7 +952,7 @@ impl Reader {
         }
     }
 
-    /// The logs of the last 30 days, at most the newest 300, oldest first.
+    /// The logs of the last 7 days, at most the newest 300, oldest first.
     fn logs(&self, now: u64) -> Vec<Log> {
         let mut logs: Vec<Log> = inventory::session_files(&self.home)
             .into_iter()
@@ -1045,7 +1050,7 @@ impl Reader {
         })();
         let mut record = record?;
         record.git = self.git_for(&record.cwd);
-        // Fit the record in 64 KB: what is left after everything but the
+        // Fit the record in 32 KB: what is left after everything but the
         // turns is for the turns, oldest dropped first.
         let base = serde_json::to_string(&record).map(|s| s.len()).unwrap_or(0) + 64;
         let mut turns = p.turns.clone();
@@ -1413,9 +1418,18 @@ mod tests {
     #[test]
     fn texts_and_targets_are_cut() {
         let long = "a".repeat(5000);
-        let t = turn_text(&long).unwrap();
-        assert_eq!(t.chars().count(), TEXT_MAX + 1);
+        let t = turn_text(&long, YOU_MAX).unwrap();
+        assert_eq!(t.chars().count(), YOU_MAX + 1);
         assert!(t.ends_with('…'));
+        let mut p = Parsed::new("claude");
+        p.you("2026-10-01T00:00:00Z", Some(long.clone()));
+        p.said("2026-10-01T00:00:01Z", &long);
+        assert!(
+            matches!(&p.turns[0].kind, Kind::You { text } if text.chars().count() == YOU_MAX + 1)
+        );
+        assert!(
+            matches!(&p.turns[1].kind, Kind::Agent { text } if text.chars().count() == AGENT_MAX + 1)
+        );
         let cmd = json!({"command": format!("echo {}", "b ".repeat(200))});
         assert_eq!(target("Bash", &cmd).unwrap().chars().count(), TARGET_MAX);
         // Another tool: its first string argument, never its contents.
@@ -1441,7 +1455,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_session_keeps_its_first_prompt_within_64_kb() {
+    fn a_long_session_keeps_its_first_prompt_within_32_kb() {
         let mut p = Parsed::new("claude");
         p.meta(Some("s"), Some("/w"), Some("2026-10-01T00:00:00Z"));
         p.agent = "claude";
