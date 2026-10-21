@@ -10,6 +10,7 @@ pub mod home;
 pub mod inventory;
 pub mod link;
 pub mod service;
+pub mod sessions;
 pub mod settings;
 pub mod skill;
 #[cfg(test)]

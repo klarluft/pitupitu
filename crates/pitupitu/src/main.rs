@@ -3,7 +3,8 @@
 //! the box in, makes the home folder, installs herdr when it is missing and
 //! installs the user service; `connect` is what the service runs; `update`
 //! updates the box agent or herdr when the person asks; `prefs`, `box`,
-//! `default` and `settings` change the account's settings; `--skill`
+//! `default` and `settings` change the account's settings; `follow`,
+//! `unfollow` and `sessions` choose which sessions pitupitu follows; `--skill`
 //! teaches the person's agents all of this.
 
 use anyhow::{bail, Result};
@@ -11,7 +12,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
 use pitupitu::{
-    config, device, herdr_box, home, inventory, link, service, settings, skill, update,
+    config, device, herdr_box, home, inventory, link, service, sessions, settings, skill, update,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
@@ -104,8 +105,8 @@ enum Cmd {
         #[command(subcommand)]
         action: BoxCmd,
     },
-    /// What pitupitu brings up between turns unasked: mine (only what it
-    /// started), all (your own sessions too) or quiet (nothing unless asked).
+    /// What pitupitu brings up between turns unasked: mine (the sessions
+    /// you follow), all (every session) or quiet (nothing unless asked).
     Updates {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::UPDATES))]
         mode: String,
@@ -146,6 +147,23 @@ enum Cmd {
     },
     /// All of the account's settings and boxes.
     Settings,
+    /// Follow a session: pitupitu tells you when it finishes or needs you.
+    /// With no name, the session this runs in.
+    Follow {
+        /// The session's pane id (as `pitupitu sessions` lists it) or
+        /// words from its title.
+        session: Vec<String>,
+        /// Stop following it (the same as `pitupitu unfollow`).
+        #[arg(long)]
+        off: bool,
+    },
+    /// Stop following a session. With no name, the session this runs in.
+    Unfollow {
+        /// The session's pane id or words from its title.
+        session: Vec<String>,
+    },
+    /// This box's sessions, and which ones pitupitu follows (●).
+    Sessions,
     /// The pitupitu skill for Claude Code and Codex.
     Skill {
         #[command(subcommand)]
@@ -439,6 +457,21 @@ async fn main() -> Result<()> {
             settings::print(&settings::get(&cfg).await?, as_json);
             Ok(())
         }
+        Cmd::Follow { session, off } => {
+            follow_cmd(&Config::load(&path)?, &session, !off, as_json).await
+        }
+        Cmd::Unfollow { session } => {
+            follow_cmd(&Config::load(&path)?, &session, false, as_json).await
+        }
+        Cmd::Sessions => {
+            let body = sessions::list(&Config::load(&path)?).await?;
+            if as_json {
+                println!("{body:#}");
+            } else {
+                print!("{}", sessions::table(&body));
+            }
+            Ok(())
+        }
         Cmd::Skill { action } => {
             match action {
                 SkillCmd::Print => print!("{}", skill::SKILL),
@@ -451,6 +484,59 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// `pitupitu follow` / `unfollow`: the session named, or the one this
+/// runs in. Exits 2 when it cannot tell which session is meant.
+async fn follow_cmd(cfg: &Config, words: &[String], on: bool, as_json: bool) -> Result<()> {
+    let query = words.join(" ");
+    let (key, title) = if query.trim().is_empty() {
+        let Some(pane) = std::env::var(sessions::PANE_ENV)
+            .ok()
+            .filter(|p| !p.is_empty())
+        else {
+            eprintln!("{}", sessions::NOT_IN_HERDR);
+            std::process::exit(2);
+        };
+        // The title is only for the line printed; the pane is enough.
+        let title = match sessions::list(cfg).await {
+            Ok(body) => match sessions::find(&body, &pane) {
+                sessions::Found::One(s) => sessions::title(s),
+                _ => pane.clone(),
+            },
+            Err(_) => pane.clone(),
+        };
+        (pane, title)
+    } else {
+        let body = sessions::list(cfg).await?;
+        match sessions::find(&body, &query) {
+            sessions::Found::One(s) => (
+                s["key"].as_str().unwrap_or_default().to_string(),
+                sessions::title(s),
+            ),
+            sessions::Found::None => {
+                eprintln!(
+                    "No session on this box matches \"{query}\"; `pitupitu sessions` lists them."
+                );
+                std::process::exit(2);
+            }
+            sessions::Found::Many(hits) => {
+                eprintln!(
+                    "\"{query}\" matches more than one session; name one by more of its title \
+                     or by its id:\n{}",
+                    sessions::choices(&hits)
+                );
+                std::process::exit(2);
+            }
+        }
+    };
+    sessions::follow(cfg, &key, on).await?;
+    if as_json {
+        println!("{}", json!({"key": key, "title": title, "followed": on}));
+    } else {
+        println!("{}", sessions::said(&title, on));
+    }
+    Ok(())
 }
 
 /// After a change: the settings as they now are.

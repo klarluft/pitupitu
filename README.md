@@ -15,7 +15,7 @@ phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound Web
 ```
 
 - The box agent **dials out** to `wss://api.pitupitu.chat/v1/box`. Nothing connects in: no open port, no VPN, no certificate on your machine.
-- The cloud can ask for a fixed set of operations only, served through herdr: list and open workspaces and tabs, start an agent in a pane, send it a prompt or keys, read its screen, wait for it; and update this agent or herdr when you say so. There is no shell and no arbitrary command. The full list is in [docs/box-link.md](docs/box-link.md) and in [`calls.rs`](crates/pitupitu/src/calls.rs).
+- The cloud can ask for a fixed set of operations only, served through herdr: list, open and close workspaces and tabs, stop a session you asked it to stop, start an agent in a pane, send it a prompt or keys, read its screen, wait for it; and update this agent or herdr when you say so. There is no shell and no arbitrary command. The full list is in [docs/box-link.md](docs/box-link.md) and in [`calls.rs`](crates/pitupitu/src/calls.rs).
 - Your agents run as they always do, your own unmodified `claude` and `codex` (or any agent herdr supports) signed in by you, on your own subscriptions or keys, in your own permission mode. pitupitu never reads, sees or uses their credentials.
 - herdr's server: the box agent starts `herdr server` when none is running (at its own start, and whenever herdr stops answering) and never stops it. It runs on its own, so restarting or updating the box agent leaves your sessions running. Open `herdr` and you attach to that same server; if you opened `herdr` first, pitupitu uses yours.
 - Where sessions go: a project gets a herdr workspace labelled after it, as you would make one; quick work in the pitupitu home folder (a lookup, a question) goes into tabs of one `pitupitu` workspace, so yours are not littered with them.
@@ -73,9 +73,10 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu box history on` / `off` | let pitupitu read what your agents did on this machine, or stop it ([History](#history)); on by default |
 | `pitupitu box on` / `box off` | off: stays linked, but pitupitu starts nothing here and ignores its sessions until on again |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
-| `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |
+| `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: the sessions you follow (default; its own tasks are followed from the start, yours once you `pitupitu follow` them), every session, or nothing unless asked |
 | `pitupitu agent claude\|codex\|auto` | the agent a session gets when you don't say (`auto`: what the machine has, Claude first); `pitupitu box agent …` for this machine only |
 | `pitupitu model <agent> <model>` | the model that agent runs on when you don't say (`pitupitu model claude opus`); `--clear` for its own default |
+| `pitupitu follow [<session>]` | follow a session: pitupitu tells you when it finishes or needs you. Run it in a session in herdr, or name one by its title or id; `--off` or `pitupitu unfollow` to stop. `pitupitu sessions` lists this machine's sessions and which are followed |
 | `pitupitu place add <name> <path>` | a folder on this machine with a name you say ("in acme, run the tests"); `place rm <name>`, `pitupitu places` lists them all |
 | `pitupitu --skill` | print the skill for agents; `pitupitu skill install` puts it in `~/.claude/skills` and `~/.codex/skills` |
 | `pitupitu update [box\|herdr\|all]` | show the newer release and what is running, ask, then install it the way it was installed; sessions keep running (`--check` only looks, `--yes` for a script, `--handoff` restarts herdr's server too, `--no-restart`) |

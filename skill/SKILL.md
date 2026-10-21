@@ -1,6 +1,6 @@
 ---
 name: pitupitu
-description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, or check pitupitu's status.
+description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), or check pitupitu's status.
 ---
 
 # pitupitu
@@ -27,10 +27,14 @@ Every command takes `--json` and never prompts when there is no terminal.
 - `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.
-- `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): only what it started; `all`: the person's own sessions too; `quiet`: nothing unless asked.
+- `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): the followed sessions (its own tasks, and the person's own once followed); `all`: every session; `quiet`: nothing unless asked.
 - `pitupitu agent claude|codex|auto`: the agent a session gets when the person does not say (`auto`: whatever the machine has, Claude first). `pitupitu box agent claude|codex|auto`: this machine's own default over the account's.
 - `pitupitu model claude opus` / `pitupitu model codex gpt-5` / `pitupitu model claude --clear`: the model that agent runs on when the person does not say, as the CLI names it.
+- `pitupitu follow` / `pitupitu unfollow`: follow a session, so pitupitu tells the person when it finishes or needs them, or stop. With nothing after it, the session the command runs in (it must run inside herdr); or name one by words from its title or by its id (`pitupitu follow login page`). `pitupitu follow --off` is the same as `unfollow`.
+- `pitupitu sessions`: this machine's sessions with their status, which are followed (●) and which pitupitu started itself.
 - `pitupitu place add <name> <path>` / `pitupitu place rm <name>` / `pitupitu places`: folders on this machine with a name the person says ("in acme, run the tests"). Use it when they ask to name a project folder for pitupitu; the path is made absolute.
+
+When the person says to keep them posted on this session, to let pitupitu report on it, to tell them when it is done, or the like, run `pitupitu follow` with nothing after it, from inside this session: it follows the session you are in. Tell them it is done in one line. Use `pitupitu sessions` to see what is followed already.
 
 Change preferences by reading them first (`pitupitu prefs --json`), editing the text, and writing it back whole with `pitupitu prefs set -`; keep what the person did not ask to change.
 

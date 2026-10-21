@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **4** (box 0.6; the cloud also accepts 3).
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **5** (box 0.7; the cloud also accepts 4).
 
 ## Connecting
 
@@ -38,7 +38,7 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 4, "version": "0.6.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 5, "version": "0.7.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
@@ -58,7 +58,7 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `agy`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 4 (0.6) had the same `hello` and every call but `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
@@ -71,6 +71,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `create_tab` | `workspace`, `cwd?`, `label` | `Created` |
 | `close_workspace` | `workspace` | `null` |
 | `close_tab` | `tab` | `null` |
+| `close_session` | `pane` | `null`; since 0.7, below |
 | `start_agent` | `name`, `kind`, `pane`, `accept_trust_prompt`, `timeout_ms?`, `agent_args?` | `AgentInfo` |
 | `prompt` | `agent`, `text` | `AgentInfo` (the state before the agent reacted) |
 | `agent` | `agent` | `AgentInfo` |
@@ -81,6 +82,13 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `update` | `what` (`box` or `herdr`), `handoff?` (herdr only, default false: restart herdr's server on the new version, the sessions kept, best effort; without it the running server stays as it is) | `{"what", "from", "to", "install", "restart"}`; since 0.5 |
 
 An unknown call answers `bad_call`, so calls can be added behind a protocol bump without breaking older boxes. There is no other way for the cloud to act on the box.
+
+### `close_session`
+
+Stops a session when the person asks, including one they started by hand in herdr, which the cloud knows only by its pane. The box asks herdr which tab holds `pane` (`pane get`) and closes that tab (`tab close`), with everything running in it. When it was the only tab of its workspace, herdr closes the workspace too, as it does whenever the last tab goes. Other tabs and workspaces are left alone.
+
+- `api` with code `not_found`: herdr has no pane with that id (or it went away before its tab closed).
+- Any other herdr error keeps herdr's own code, as for every call.
 
 ### `update`
 
@@ -162,6 +170,6 @@ What the states, counters and error codes mean is in [`sessions.md`](sessions.md
 
 - **Your own agents, unmodified.** herdr starts them (`herdr agent start --kind`) from your `PATH`, as you, signed in by you, in your own permission mode. The box never reads, copies or passes on their credentials and adds no permission flags. The folder trust prompt is answered only when the cloud asks (`accept_trust_prompt`), with the option that keeps approvals on.
 - **The server.** herdr starts no server by itself: with none running, every call fails with `server_not_running`. The box starts `herdr server` before `hello` and whenever its once-a-second `agent list` finds none running, detached (a session and process group of its own, no terminal, not part of the user service), with a pause between tries that grows from 5 s to 5 min. It never stops a server. A herdr you opened is used as it is; one the box started is what `herdr` attaches to later. Everything is in herdr's default session.
-- **Workspaces and tabs.** A place is a herdr workspace (`workspace create --cwd --label --no-focus`); a task in it is a tab. Scratch work goes into tabs of one `pitupitu` workspace (`create_workspace` with `scratch`). pitupitu closes only what it created.
+- **Workspaces and tabs.** A place is a herdr workspace (`workspace create --cwd --label --no-focus`); a task in it is a tab. Scratch work goes into tabs of one `pitupitu` workspace (`create_workspace` with `scratch`). pitupitu closes only what it created, and a session the person asked it to stop (`close_session`).
 - **Seeing a session.** `herdr` on that machine, or `herdr --remote <machine>` over SSH.
 - **Installed and updated by pitupitu, when asked.** `install.sh` and `pitupitu setup` install herdr with its own installer when it is missing, and `setup` runs `herdr integration install` for Claude Code and Codex so herdr resumes their sessions after a restart. Updates run only through `pitupitu update herdr` or the `update` call.

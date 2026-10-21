@@ -6,7 +6,8 @@
 //!
 //! Lessons encoded here:
 //! - `workspace create` / `tab create` return a fresh shell pane; that is
-//!   where an agent gets started. pitupitu only ever closes what it created.
+//!   where an agent gets started. pitupitu only ever closes what it created,
+//!   or a session the person asked it to stop.
 //! - `agent start` in a directory Claude Code has not seen can return
 //!   `agent_not_ready` because of its "trust this folder?" dialog;
 //!   [`HerdrCli::start_agent`] can answer it.
@@ -109,6 +110,10 @@ pub trait AgentHost: Send + Sync {
     async fn close_workspace(&self, workspace: &WorkspaceId) -> Result<()>;
 
     async fn close_tab(&self, tab: &TabId) -> Result<()>;
+
+    /// The tab that holds `pane`, any pane, the person's own included;
+    /// `pane_not_found` when there is none.
+    async fn pane_tab(&self, pane: &PaneId) -> Result<TabId>;
 
     /// Start `kind` in an idle shell pane under a unique `name`, and get it to
     /// the point where it accepts prompts.
