@@ -5,6 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 /// Never ask the cloud more often than this, whatever it says.
@@ -53,10 +54,20 @@ impl Me {
     }
 }
 
+/// How the sign-in link is offered besides printing it.
+#[derive(Debug, Clone, Copy)]
+pub struct Offer {
+    /// Try the desktop's opener when there is a display; failing that is
+    /// fine, the URL is on screen.
+    pub open_browser: bool,
+    /// Draw the link as a QR code too, for a phone's camera, when stderr
+    /// is a terminal that can draw it (`qr_wanted`).
+    pub qr: bool,
+}
+
 /// Ask for a device code, show it, poll until the person decides. Prints
-/// to stderr. `open_browser` tries the desktop's opener when there is a
-/// display; failing that is fine, the URL is on screen.
-pub async fn login(url: &str, box_name: &str, open_browser: bool) -> Result<Issued> {
+/// to stderr.
+pub async fn login(url: &str, box_name: &str, offer: Offer) -> Result<Issued> {
     let base = url.trim_end_matches('/');
     let http = reqwest::Client::new();
     let resp = http
@@ -79,10 +90,27 @@ pub async fn login(url: &str, box_name: &str, open_browser: bool) -> Result<Issu
     eprintln!();
     eprintln!("      {}", code.user_code);
     eprintln!();
+    let no_color = std::env::var("NO_COLOR").ok();
+    let term = std::env::var("TERM").ok();
+    if qr_wanted(
+        offer.qr,
+        std::io::stderr().is_terminal(),
+        no_color.as_deref(),
+        term.as_deref(),
+    ) {
+        if let Some(lines) = qr_lines(&code.verification_url_complete) {
+            eprintln!("  or scan this with your phone's camera:");
+            eprintln!();
+            for line in lines {
+                eprintln!("  {line}");
+            }
+            eprintln!();
+        }
+    }
     eprintln!("  {}", code.verification_url_complete);
     eprintln!();
     eprintln!("  waiting for you to approve it (press ctrl-c to stop) …");
-    if open_browser {
+    if offer.open_browser {
         try_open(&code.verification_url_complete);
     }
 
@@ -119,6 +147,56 @@ pub async fn login(url: &str, box_name: &str, open_browser: bool) -> Result<Issu
             other => bail!("{base}/v1/device/token: {other}"),
         }
     }
+}
+
+/// Whether to draw the QR code: the person did not say `--no-qr`, and
+/// stderr is a terminal that can draw it: not a pipe or a log file, not
+/// `TERM=dumb`, and not one where colour was switched off (`NO_COLOR`,
+/// see no-color.org), since the code is drawn with colours.
+fn qr_wanted(asked: bool, stderr_is_tty: bool, no_color: Option<&str>, term: Option<&str>) -> bool {
+    asked && stderr_is_tty && no_color.is_none_or(str::is_empty) && term != Some("dumb")
+}
+
+/// Light modules around the code on every side. The standard asks for 4;
+/// 2 reads as well on a screen and keeps the code short enough for a
+/// 24-line terminal.
+const QUIET_ZONE: usize = 2;
+
+/// `url` as a QR code, two modules per character cell with half blocks.
+///
+/// Phone cameras read dark-on-light codes best, and terminals are dark
+/// as often as light, so the colours are not left to the terminal: every
+/// line is black on bright white (`ESC[30;107m`), dark modules are drawn
+/// in the foreground (`▀`, `▄`, `█`) and light ones, the quiet zone
+/// included, are the white background. That looks the same on a dark and
+/// a light theme. Error correction L: a screen is not scuffed, and the
+/// lowest level gives the smallest code (29×29 for a sign-in link).
+fn qr_lines(url: &str) -> Option<Vec<String>> {
+    let code = qrcode::QrCode::with_error_correction_level(url, qrcode::EcLevel::L).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let size = width + 2 * QUIET_ZONE;
+    let dark = |x: usize, y: usize| {
+        let (Some(x), Some(y)) = (x.checked_sub(QUIET_ZONE), y.checked_sub(QUIET_ZONE)) else {
+            return false;
+        };
+        x < width && y < width && colors[y * width + x] == qrcode::Color::Dark
+    };
+    let lines = (0..size)
+        .step_by(2)
+        .map(|y| {
+            let row: String = (0..size)
+                .map(|x| match (dark(x, y), dark(x, y + 1)) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => ' ',
+                })
+                .collect();
+            format!("\x1b[30;107m{row}\x1b[0m")
+        })
+        .collect();
+    Some(lines)
 }
 
 fn try_open(url: &str) {
@@ -194,6 +272,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    const QUIET: Offer = Offer {
+        open_browser: false,
+        qr: false,
+    };
     const KEY: &str = "ptp_0123456789abcdefghijklmnopqrstuvwxyzABCD";
 
     /// A cloud that approves on the third poll and issues the key once.
@@ -268,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn the_key_is_issued_once_and_works() {
         let url = mock_cloud().await;
-        let issued = login(&url, "testbox", false).await.unwrap();
+        let issued = login(&url, "testbox", QUIET).await.unwrap();
         assert_eq!(
             issued,
             Issued {
@@ -277,7 +359,7 @@ mod tests {
                 box_name: "testbox".into()
             }
         );
-        let err = login(&url, "testbox", false).await.unwrap_err();
+        let err = login(&url, "testbox", QUIET).await.unwrap_err();
         assert!(err.to_string().contains("not_found"), "{err}");
 
         let account = me(&url, KEY).await.unwrap();
@@ -286,5 +368,44 @@ mod tests {
             me(&url, "ptp_wrong").await,
             Err(MeError::Rejected)
         ));
+    }
+
+    #[test]
+    fn the_sign_in_link_draws_as_a_qr_code() {
+        let lines = qr_lines("https://pitupitu.chat/device?code=BCDF-GHJK").unwrap();
+        // 29 modules (version 3, level L) and 2 of quiet zone on each side
+        // make 33 rows: 17 lines of two rows each, 33 cells wide.
+        assert_eq!(lines.len(), 17);
+        for line in &lines {
+            let cells = line
+                .strip_prefix("\x1b[30;107m")
+                .and_then(|l| l.strip_suffix("\x1b[0m"))
+                .unwrap();
+            assert_eq!(cells.chars().count(), 33, "{line:?}");
+            assert!(cells.chars().all(|c| " ▀▄█".contains(c)));
+        }
+        // The quiet zone: the first line and the edges are light.
+        assert!(lines[0].contains(&" ".repeat(33)));
+        // The top-left finder pattern starts right after the quiet zone.
+        assert!(lines[1].contains("  █▀▀▀▀▀█ "));
+    }
+
+    #[test]
+    fn the_qr_code_is_skipped_when_asked_or_when_it_cannot_be_drawn() {
+        assert!(qr_wanted(true, true, None, Some("xterm-256color")));
+        assert!(qr_wanted(true, true, Some(""), None));
+        assert!(
+            !qr_wanted(false, true, None, Some("xterm-256color")),
+            "--no-qr"
+        );
+        assert!(
+            !qr_wanted(true, false, None, Some("xterm-256color")),
+            "not a terminal"
+        );
+        assert!(
+            !qr_wanted(true, true, Some("1"), Some("xterm-256color")),
+            "NO_COLOR"
+        );
+        assert!(!qr_wanted(true, true, None, Some("dumb")), "TERM=dumb");
     }
 }

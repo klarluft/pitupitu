@@ -59,6 +59,9 @@ enum Cmd {
         /// Only print the sign-in link; do not try to open a browser.
         #[arg(long)]
         no_browser: bool,
+        /// Do not draw the sign-in link as a QR code.
+        #[arg(long)]
+        no_qr: bool,
         /// Linux: keep pitupitu running while you are logged out, without
         /// asking (`loginctl enable-linger`).
         #[arg(long, conflicts_with = "no_linger")]
@@ -266,6 +269,7 @@ async fn main() -> Result<()> {
             box_name,
             no_service,
             no_browser,
+            no_qr,
             linger,
             no_linger,
         } => {
@@ -280,7 +284,10 @@ async fn main() -> Result<()> {
                 relink,
                 box_name,
                 no_service,
-                no_browser,
+                device::Offer {
+                    open_browser: !no_browser,
+                    qr: !no_qr,
+                },
                 linger,
             )
             .await
@@ -644,7 +651,7 @@ async fn setup(
     relink: bool,
     box_name: Option<String>,
     no_service: bool,
-    no_browser: bool,
+    offer: device::Offer,
     linger: Option<bool>,
 ) -> Result<()> {
     let cfg = Config::load(path)?;
@@ -667,7 +674,7 @@ async fn setup(
         ),
         None => {
             let name = box_name.unwrap_or_else(|| cfg.box_name());
-            let issued = device::login(&cfg.cloud_url, &name, !no_browser).await?;
+            let issued = device::login(&cfg.cloud_url, &name, offer).await?;
             let mut entries = vec![
                 ("cloud", "api_key", issued.api_key.as_str()),
                 ("cloud", "box", issued.box_name.as_str()),
