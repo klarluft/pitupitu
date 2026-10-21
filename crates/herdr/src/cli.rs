@@ -153,15 +153,29 @@ impl HerdrCli {
         args: &[&str],
     ) -> Result<(std::process::ExitStatus, String, String)> {
         debug!(bin = %self.bin, ?args, "herdr");
-        let out = self
-            .command()
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(Error::Spawn)?;
+        let mut tries = 0;
+        let out = loop {
+            let run = self
+                .command()
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+            match run {
+                // The binary is open for writing somewhere for a moment: an
+                // update replacing it, or another process forked while a
+                // writer still held it (the fork keeps the handle until its
+                // exec). Gone within milliseconds; try again.
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
+                    tries += 1;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => return Err(Error::Spawn(e)),
+                Ok(out) => break out,
+            }
+        };
         Ok((
             out.status,
             String::from_utf8_lossy(&out.stdout).into_owned(),
