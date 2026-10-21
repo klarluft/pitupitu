@@ -105,8 +105,8 @@ enum Cmd {
         #[command(subcommand)]
         action: BoxCmd,
     },
-    /// What pitupitu brings up between turns unasked: mine (only what it
-    /// started), all (your own sessions too) or quiet (nothing unless asked).
+    /// What pitupitu brings up between turns unasked: mine (the sessions
+    /// you follow), all (every session) or quiet (nothing unless asked).
     Updates {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::UPDATES))]
         mode: String,

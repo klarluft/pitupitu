@@ -73,7 +73,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu box history on` / `off` | let pitupitu read what your agents did on this machine, or stop it ([History](#history)); on by default |
 | `pitupitu box on` / `box off` | off: stays linked, but pitupitu starts nothing here and ignores its sessions until on again |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
-| `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |
+| `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: the sessions you follow (default; its own tasks are followed from the start, yours once you `pitupitu follow` them), every session, or nothing unless asked |
 | `pitupitu agent claude\|codex\|auto` | the agent a session gets when you don't say (`auto`: what the machine has, Claude first); `pitupitu box agent …` for this machine only |
 | `pitupitu model <agent> <model>` | the model that agent runs on when you don't say (`pitupitu model claude opus`); `--clear` for its own default |
 | `pitupitu follow [<session>]` | follow a session: pitupitu tells you when it finishes or needs you. Run it in a session in herdr, or name one by its title or id; `--off` or `pitupitu unfollow` to stop. `pitupitu sessions` lists this machine's sessions and which are followed |

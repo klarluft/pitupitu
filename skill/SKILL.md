@@ -27,7 +27,7 @@ Every command takes `--json` and never prompts when there is no terminal.
 - `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.
-- `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): only what it started; `all`: the person's own sessions too; `quiet`: nothing unless asked.
+- `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): the followed sessions (its own tasks, and the person's own once followed); `all`: every session; `quiet`: nothing unless asked.
 - `pitupitu agent claude|codex|auto`: the agent a session gets when the person does not say (`auto`: whatever the machine has, Claude first). `pitupitu box agent claude|codex|auto`: this machine's own default over the account's.
 - `pitupitu model claude opus` / `pitupitu model codex gpt-5` / `pitupitu model claude --clear`: the model that agent runs on when the person does not say, as the CLI names it.
 - `pitupitu follow` / `pitupitu unfollow`: follow a session, so pitupitu tells the person when it finishes or needs them, or stop. With nothing after it, the session the command runs in (it must run inside herdr); or name one by words from its title or by its id (`pitupitu follow login page`). `pitupitu follow --off` is the same as `unfollow`.

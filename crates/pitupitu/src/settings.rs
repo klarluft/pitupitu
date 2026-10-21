@@ -114,9 +114,9 @@ pub fn print(settings: &Value, as_json: bool) {
     println!(
         "updates: {}",
         match settings["updates"].as_str().unwrap_or("mine") {
-            "all" => "all (your own sessions too)",
+            "all" => "all (every session, followed or not)",
             "quiet" => "quiet (nothing unless asked)",
-            _ => "mine (only what pitupitu started)",
+            _ => "mine (the sessions you follow)",
         }
     );
     let models: Vec<String> = settings["agent_models"]
