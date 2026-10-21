@@ -36,16 +36,21 @@ pub fn agent_or_null(name: &str) -> Value {
 }
 
 fn endpoint(cfg: &Config) -> Result<(String, String)> {
+    endpoint_at(cfg, "/v1/settings")
+}
+
+/// The cloud's URL for `path` and this box's key.
+pub(crate) fn endpoint_at(cfg: &Config, path: &str) -> Result<(String, String)> {
     let Some(key) = cfg.api_key.clone() else {
         bail!("this box is not signed in; run `pitupitu setup`");
     };
     Ok((
-        format!("{}/v1/settings", cfg.cloud_url.trim_end_matches('/')),
+        format!("{}{path}", cfg.cloud_url.trim_end_matches('/')),
         key,
     ))
 }
 
-async fn answer(resp: reqwest::Response) -> Result<Value> {
+pub(crate) async fn answer(resp: reqwest::Response) -> Result<Value> {
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     if !status.is_success() {

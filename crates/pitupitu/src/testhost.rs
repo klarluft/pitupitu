@@ -93,6 +93,17 @@ impl AgentHost for FakeHost {
         Ok(())
     }
 
+    /// `wN:pM` lives in tab `wN:tM`; a pane of `w404` does not exist.
+    async fn pane_tab(&self, pane: &PaneId) -> Result<TabId> {
+        match pane.0.split_once(":p") {
+            Some((ws, n)) if ws != "w404" => Ok(TabId(format!("{ws}:t{n}"))),
+            _ => Err(Error::Api {
+                code: "pane_not_found".into(),
+                message: format!("pane {pane} not found"),
+            }),
+        }
+    }
+
     async fn start_agent(
         &self,
         name: &str,

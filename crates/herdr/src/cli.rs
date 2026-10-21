@@ -367,6 +367,14 @@ impl AgentHost for HerdrCli {
         self.run_json(&["tab", "close", &tab.0]).await.map(drop)
     }
 
+    async fn pane_tab(&self, pane: &PaneId) -> Result<TabId> {
+        let result = self.run_json(&["pane", "get", &pane.0]).await?;
+        result["pane"]["tab_id"]
+            .as_str()
+            .map(|t| TabId(t.to_string()))
+            .ok_or_else(|| Error::Shape(format!("pane_info: no `pane.tab_id` in {result}")))
+    }
+
     async fn start_agent(
         &self,
         name: &str,

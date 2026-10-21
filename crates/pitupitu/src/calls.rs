@@ -124,6 +124,11 @@ struct Tab {
 }
 
 #[derive(Deserialize)]
+struct Pane {
+    pane: PaneId,
+}
+
+#[derive(Deserialize)]
 struct StartAgent {
     name: String,
     kind: String,
@@ -204,6 +209,21 @@ async fn scratch_tab(
     }
 }
 
+/// Stop a session, one the person started by hand included: close the
+/// tab that holds `pane`. When it was its workspace's only tab, herdr
+/// closes the workspace with it. `not_found` when there is no such pane
+/// (or it went away before its tab closed).
+async fn close_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallError> {
+    let gone = |e: herdr::Error| match e.code() {
+        Some("pane_not_found" | "tab_not_found") => {
+            CallError::api("not_found", format!("no pane {pane} on this box"))
+        }
+        _ => CallError::from(e),
+    };
+    let tab = host.pane_tab(pane).await.map_err(gone)?;
+    host.close_tab(&tab).await.map_err(gone)
+}
+
 /// How long the box lets a call run before answering `timeout` itself:
 /// the call's own timeout plus a margin, or a generous default.
 pub fn deadline(call: &str, args: &Value) -> Duration {
@@ -250,6 +270,10 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         "close_tab" => {
             let a: Tab = args(call, a)?;
             ok(host.close_tab(&a.tab).await?)
+        }
+        "close_session" => {
+            let a: Pane = args(call, a)?;
+            ok(close_session(host, &a.pane).await?)
         }
         "start_agent" => {
             let a: StartAgent = args(call, a)?;
@@ -440,6 +464,63 @@ mod tests {
             .await
             .unwrap();
         // ...and herdr closes the workspace with its last tab.
+        assert!(host.list_workspaces().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_session_closes_the_tab_that_holds_the_pane() {
+        let host = FakeHost::default();
+        assert_eq!(
+            dispatch(&host, "close_session", json!({"pane": "w3:p2"})).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(host.log(), ["close_tab w3:t2"]);
+        let e = dispatch(&host, "close_session", json!({"pane": "w404:p1"}))
+            .await
+            .unwrap_err();
+        assert_eq!((e.kind, e.code.as_deref()), ("api", Some("not_found")));
+        let e = dispatch(&host, "close_session", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, "bad_call");
+        assert_eq!(host.log().len(), 1);
+    }
+
+    /// The same against a live herdr: a tab of a workspace with two goes
+    /// alone; the last one takes its workspace with it.
+    #[tokio::test]
+    async fn close_session_in_a_live_herdr() {
+        let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
+            return;
+        };
+        let host = &scratch.cli;
+        host.start_server().unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        while host.list_workspaces().await.is_err() {
+            assert!(std::time::Instant::now() < end, "no server");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let first = host.create_workspace(dir.path(), "mine").await.unwrap();
+        let second = host
+            .create_tab(&first.workspace_id, None, "two")
+            .await
+            .unwrap();
+        let e = dispatch(host, "close_session", json!({"pane": "w99:p99"}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code.as_deref(), Some("not_found"), "{e:?}");
+        dispatch(host, "close_session", json!({"pane": second.root_pane}))
+            .await
+            .unwrap();
+        assert_eq!(host.list_workspaces().await.unwrap().len(), 1);
+        let e = dispatch(host, "close_session", json!({"pane": second.root_pane}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code.as_deref(), Some("not_found"), "{e:?}");
+        dispatch(host, "close_session", json!({"pane": first.root_pane}))
+            .await
+            .unwrap();
         assert!(host.list_workspaces().await.unwrap().is_empty());
     }
 
