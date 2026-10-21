@@ -98,7 +98,7 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PrefsCmd>,
     },
-    /// This box's name, note, agent and on/off.
+    /// This box's name, note, agent, on/off and history.
     #[command(name = "box")]
     Box {
         #[command(subcommand)]
@@ -183,6 +183,14 @@ enum BoxCmd {
     Agent {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
+    },
+    /// Whether pitupitu reads what your agents did on this box (your
+    /// prompts, the gist of their replies, which files and commands they
+    /// touched, recent commits) to keep track of your projects. On by
+    /// default.
+    History {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(["on", "off"]))]
+        state: String,
     },
     /// Rename this box: what you call it when you talk ("on the mac, …").
     Rename {
@@ -346,6 +354,17 @@ async fn main() -> Result<()> {
                 BoxCmd::On => json!({"enabled": true}),
                 BoxCmd::Off => json!({"enabled": false}),
                 BoxCmd::Agent { name } => json!({"agent": settings::agent_or_null(&name)}),
+                BoxCmd::History { state } => {
+                    let on = state == "on";
+                    let s = settings::patch(&cfg, json!({"history": on})).await?;
+                    let said = if on {
+                        settings::HISTORY_SAYS
+                    } else {
+                        settings::HISTORY_OFF_SAYS
+                    };
+                    done(&s, as_json, said);
+                    return Ok(());
+                }
                 BoxCmd::Rename { .. } => unreachable!("handled above"),
             };
             let s = settings::patch(&cfg, change).await?;
@@ -470,6 +489,7 @@ async fn connect(cfg: &Config) -> Result<()> {
         keeper: Some(keeper),
         available,
         history: Some(config::home_dir()),
+        state_dir: config::state_dir(),
         ping_timeout: link::PING_TIMEOUT,
         updates: true,
         releases: Default::default(),
@@ -628,10 +648,14 @@ async fn setup(
         }
     }
 
-    // 4. herdr, which runs the agents.
+    // 4. History: on by default, said in one line, not asked.
+    eprintln!();
+    eprintln!("  {}", settings::HISTORY_SAYS);
+
+    // 5. herdr, which runs the agents.
     setup_herdr().await;
 
-    // 5. The service.
+    // 6. The service.
     if !no_service {
         offer_linger(path, linger)?;
     }

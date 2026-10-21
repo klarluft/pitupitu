@@ -2,8 +2,9 @@
 //! `default` and `settings`, over `GET`/`PATCH /v1/settings` with this
 //! box's key. The preferences are what the person tells pitupitu about
 //! themselves and their machines; the voice foreman reads them in every
-//! conversation. `note`, `agent` and on/off (`enabled`) are this box's
-//! own; `updates` is what the foreman brings up between turns unasked.
+//! conversation. `note`, `agent`, on/off (`enabled`) and `history` are
+//! this box's own; `updates` is what the foreman brings up between turns
+//! unasked.
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
@@ -12,6 +13,15 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 pub const UPDATES: &[&str] = &["mine", "all", "quiet"];
+
+/// What history is, said by `pitupitu setup` and `pitupitu box history on`.
+pub const HISTORY_SAYS: &str = "pitupitu keeps track of your projects by reading what your agents \
+    did on this machine (your prompts, the gist of their replies, which files and commands they \
+    touched, recent commits; never file contents, command output or keys). Details and how to \
+    switch it off: https://pitupitu.chat/privacy";
+/// Said by `pitupitu box history off`.
+pub const HISTORY_OFF_SAYS: &str = "pitupitu will no longer read what your agents did on this \
+    machine; what it already stored is deleted from the app page, What pitupitu knows.";
 /// The agents a default can name; `auto` clears it.
 pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
 pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
@@ -145,6 +155,11 @@ pub fn print(settings: &Value, as_json: bool) {
         );
         if let Some(a) = b["agent"].as_str() {
             line.push_str(&format!(", agent {a}"));
+        }
+        match b["history"].as_bool() {
+            Some(true) => line.push_str(", history on"),
+            Some(false) => line.push_str(", history off"),
+            None => {}
         }
         if let Some(n) = b["note"].as_str() {
             line.push_str(&format!(" — {n}"));

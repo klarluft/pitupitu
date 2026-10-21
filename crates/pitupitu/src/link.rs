@@ -5,6 +5,7 @@
 
 use crate::calls::{self, CallError};
 use crate::herdr_box::{self, HerdrInfo, Keeper};
+use crate::history::{self, Setting};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
 use crate::update::{self, Refused};
@@ -22,7 +23,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -54,8 +55,11 @@ pub struct Link {
     /// The agent CLIs found on `PATH` when the agent started.
     pub available: Vec<Available>,
     /// Where the agents keep their session history (the user's home
-    /// directory); `None` sends no recent folders.
+    /// directory); `None` sends no recent folders and never reads the
+    /// sessions, whatever the cloud's `settings` say.
     pub history: Option<PathBuf>,
+    /// Where the session reader remembers what it sent.
+    pub state_dir: PathBuf,
     /// Shortened in tests.
     pub ping_timeout: Duration,
     /// Ask GitHub for the newest releases now and then (`latest` and
@@ -221,6 +225,17 @@ impl Link {
 
         let (tx, mut rx) = mpsc::channel::<Out>(64);
         let refresh = Arc::new(Notify::new());
+        // The session reader, on a thread of its own: it waits for the
+        // cloud's `settings` and ends with this link.
+        let (settings, settings_rx) = std::sync::mpsc::channel::<Setting>();
+        if let Some(home) = self.history.clone() {
+            let (state_dir, tx) = (self.state_dir.clone(), tx.clone());
+            std::thread::spawn(move || {
+                history::run(home, state_dir, settings_rx, move |note| {
+                    tx.blocking_send(note.into()).is_ok()
+                })
+            });
+        }
         let poller = tokio::spawn(poll(
             Polled {
                 host: self.host.clone(),
@@ -250,7 +265,7 @@ impl Link {
                         Some(m) => m.context("reading from the cloud")?,
                     };
                     match msg {
-                        Message::Text(t) => self.incoming(t.as_str(), &tx, &refresh),
+                        Message::Text(t) => self.incoming(t.as_str(), &tx, &refresh, &settings),
                         // Pong answers are queued by the library and flushed
                         // on the next read or write.
                         Message::Ping(_) => last_ping = Instant::now(),
@@ -294,15 +309,28 @@ impl Link {
     /// A frame from the cloud: a call is run on its own task, the reply
     /// goes back through `tx`. Only the call's name is logged, never its
     /// arguments or result.
-    fn incoming(&self, frame: &str, tx: &mpsc::Sender<Out>, refresh: &Arc<Notify>) {
+    fn incoming(
+        &self,
+        frame: &str,
+        tx: &mpsc::Sender<Out>,
+        refresh: &Arc<Notify>,
+        settings: &std::sync::mpsc::Sender<Setting>,
+    ) {
         let Ok(value) = serde_json::from_str::<Value>(frame) else {
             warn!("unreadable frame from the cloud");
             return;
         };
         if let Some(note) = value.get("note").and_then(Value::as_str) {
-            // Protocol 2's `settings` note (the driver) has nothing left
-            // to set: herdr serves every call.
-            debug!(note, "note from the cloud");
+            // `settings` carries `history` (and `resend`) for the session
+            // reader; other fields, such as protocol 2's driver, are not
+            // acted on.
+            match (note, Setting::from_note(&value)) {
+                ("settings", Some(s)) => {
+                    debug!(history = s.history, resend = s.resend, "settings");
+                    let _ = settings.send(s);
+                }
+                _ => debug!(note, "note from the cloud"),
+            }
             return;
         }
         let Some(id) = value.get("id").cloned() else {
@@ -671,7 +699,7 @@ mod tests {
             url,
             api_key: "ptp_test".into(),
             box_name: "testbox".into(),
-            home,
+            home: home.clone(),
             host: Arc::new(host),
             keeper: None,
             available: vec![Available {
@@ -679,6 +707,7 @@ mod tests {
                 version: "2.3.1 (Claude Code)".into(),
             }],
             history: None,
+            state_dir: home.join(".state"),
             ping_timeout: PING_TIMEOUT,
             updates: false,
             releases: Default::default(),
@@ -701,7 +730,7 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 3);
+        assert_eq!(hello["protocol"], 4);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], Value::Null);
         assert!(hello.get("driver").is_none());
@@ -755,6 +784,46 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(session.await.unwrap().unwrap(), End::Replaced);
+    }
+
+    /// Protocol 4: the session reader starts on the cloud's `settings`
+    /// with `history`, and not before.
+    #[tokio::test]
+    async fn history_follows_the_settings_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let logs = dir.path().join(".claude/projects/-work");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("s-9.jsonl"),
+            format!(
+                "{}\n",
+                json!({"type": "user", "isSidechain": false, "cwd": work, "sessionId": "s-9",
+                       "timestamp": "2026-10-20T10:00:00Z",
+                       "message": {"role": "user", "content": "Tidy the docs"}})
+            ),
+        )
+        .unwrap();
+        let (url, server) = cloud().await;
+        let mut l = link(url, FakeHost::default(), dir.path().to_path_buf());
+        l.history = Some(dir.path().to_path_buf());
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+        next_json(&mut ws).await; // hello
+        next_json(&mut ws).await; // home
+        ws.send(text(
+            &json!({"note": "settings", "history": true, "future": 1}),
+        ))
+        .await
+        .unwrap();
+        let note = tokio::time::timeout(Duration::from_secs(10), next_json(&mut ws))
+            .await
+            .expect("a session note");
+        assert_eq!(note["note"], "session");
+        assert_eq!(note["session"]["id"], "s-9");
+        assert_eq!(note["session"]["turns"][0]["text"], "Tidy the docs");
+        session.abort();
     }
 
     #[tokio::test]

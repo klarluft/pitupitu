@@ -19,7 +19,7 @@ phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound Web
 - Your agents run as they always do, your own unmodified `claude` and `codex` (or any agent herdr supports) signed in by you, on your own subscriptions or keys, in your own permission mode. pitupitu never reads, sees or uses their credentials.
 - herdr's server: the box agent starts `herdr server` when none is running (at its own start, and whenever herdr stops answering) and never stops it. It runs on its own, so restarting or updating the box agent leaves your sessions running. Open `herdr` and you attach to that same server; if you opened `herdr` first, pitupitu uses yours.
 - Where sessions go: a project gets a herdr workspace labelled after it, as you would make one; quick work in the pitupitu home folder (a lookup, a question) goes into tabs of one `pitupitu` workspace, so yours are not littered with them.
-- From your files, only `skills/*/SKILL.md` in the pitupitu home folder are sent, plus what the box reports about itself: its version and herdr's (and whether newer ones exist), which agent CLIs are installed (with their versions), and the folders your agents worked in recently (only the folder paths and when, read from the agents' own session history; nothing else from those files).
+- From your files, only `skills/*/SKILL.md` in the pitupitu home folder are sent, plus what the box reports about itself: its version and herdr's (and whether newer ones exist), which agent CLIs are installed (with their versions), and the folders your agents worked in recently (only the folder paths and when, read from the agents' own session history; nothing else from those files). With history on, which it is unless you switch it off, more of that history is sent: see [History](#history).
 
 ## Install
 
@@ -53,8 +53,9 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 1. **Sign in**: it shows a code; approve it on any screen at pitupitu.chat. The box gets its own key, stored in `~/.config/pitupitu/pitupitu.toml` (readable only by you). An account can have many boxes, each named (the hostname by default, `--box` to choose); setting up the same box again replaces its old key.
 2. **pitupitu's folder** (the home folder): `~/pitupitu` by default. Requests that belong to no project run there, and `skills/<name>/SKILL.md` holds routines you name by voice. What pitupitu should know about you ("client work goes on the work laptop", "I use Codex for reviews") is your preferences, kept in your account: `pitupitu prefs edit`, the page, or just tell pitupitu "remember that …". (A `PITUPITU.md` from 0.1 is no longer read; copy anything useful into `pitupitu prefs`.)
 3. **Your agents can change pitupitu's settings** (asked once, yes by default): installs a skill that teaches Claude Code and Codex how, so you can ask your own agent to do it.
-4. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for the agents it finds, their sessions are set to come back after herdr restarts (`herdr integration install claude` and `codex`).
-5. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
+4. **History** (not asked, on by default): setup says in one line that pitupitu keeps track of your projects by reading what your agents did on this machine, and where to switch it off. See [History](#history).
+5. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for the agents it finds, their sessions are set to come back after herdr restarts (`herdr integration install claude` and `codex`).
+6. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
 
 Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 
@@ -65,10 +66,11 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 | `pitupitu setup` | sign in, pitupitu's folder, herdr, starting by itself (`--home`, `--relink`, `--box`, `--no-service`, `--linger`, `--no-linger`) |
 | `pitupitu connect` | hold the link open in the foreground (what the service runs) |
 | `pitupitu status` | account, home folder, herdr (version, server, newer release), agents found, service and version as this box sees them |
-| `pitupitu settings` | your preferences, default box, agent and models, updates, voice, and every box with its note, on/off and agent |
+| `pitupitu settings` | your preferences, default box, agent and models, updates, voice, and every box with its note, on/off, agent and history |
 | `pitupitu prefs` | show your preferences; `prefs edit`, `prefs set <file>` (`-` for stdin), `prefs clear` |
 | `pitupitu box note <text>` | one line about this box ("client work, Acme"); `--clear` |
 | `pitupitu box rename <name>` | what you call this machine when you talk; also on the talk page (tap the machine) |
+| `pitupitu box history on` / `off` | let pitupitu read what your agents did on this machine, or stop it ([History](#history)); on by default |
 | `pitupitu box on` / `box off` | off: stays linked, but pitupitu starts nothing here and ignores its sessions until on again |
 | `pitupitu default <box>` | the box used when you don't say which; `--clear` and pitupitu asks |
 | `pitupitu updates mine\|all\|quiet` | what pitupitu brings up between turns unasked: only what it started (default), your own sessions too, or nothing unless asked |
@@ -86,6 +88,22 @@ Logs: `journalctl --user -u pitupitu -f` on Linux, `~/Library/Logs/pitupitu.log`
 To see a session at the desk, open `herdr` on that machine (or `herdr --remote <machine>` over SSH): pitupitu's sessions are there with yours.
 
 Environment: `PITUPITU_CONFIG` (config file), `PITUPITU_CLOUD_URL`, `PITUPITU_CLOUD_API_KEY`, `HERDR_BIN` (the herdr binary, default `herdr` on `PATH`). `PITUPITU_HERDR_SESSION` points the box agent at a named herdr session instead of the default one; it is for tests.
+
+## History
+
+Reading what your agents did is how pitupitu keeps track of your projects: it can tell you what you were doing on the laptop yesterday, or what is left on a project, including the sessions you started yourself. So it is on by default, for each machine on its own, and `pitupitu setup` asks nothing about it; it says so in one line and links [pitupitu.chat/privacy](https://pitupitu.chat/privacy).
+
+What is read: Claude Code's and Codex's own session logs on this machine (`~/.claude/projects/*/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), the sessions of the last 7 days, at most the newest 300, and `git` in the repositories they worked in. What is sent:
+
+- each session's folder, its repository (root, `origin` remote without any password in it, branch), when it ran and its title;
+- what you typed, cut to 1000 characters, and what the agent answered, cut to 600;
+- for each tool the agent used, its name and one target: the file it edited or read, or the first 120 characters of the command it ran;
+- at most 32 KB per session: in a longer one the oldest turns are left out, except your first request;
+- for the repositories those sessions worked in: the branch, HEAD, and the current branch's commits of the last 7 days (at most 50), with the subject line and how many files each changed.
+
+Never read or sent: file contents, edits' text, command output and other tool results, the agents' thinking, subagents' transcripts, anything else in `~/.claude` or `~/.codex`, credentials, author names or emails, diffs. Anything that looks like a key or password in what is sent becomes `[redacted]` first (`sk-…`, `ghp_…`, `Bearer …`, `password=…` and the like).
+
+To switch it off: `pitupitu box history off` (or on the page). It stops at once, and the box removes its small record of what it already sent (`history.json` in its state folder); what pitupitu already stored is deleted on the app page, under What pitupitu knows. `pitupitu box history on` switches it back on, and `pitupitu settings` shows which it is for every machine. The exact format is in [docs/box-link.md](docs/box-link.md#history).
 
 ## Updating
 
