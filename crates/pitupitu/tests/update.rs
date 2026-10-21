@@ -48,7 +48,10 @@ fn release(dir: &std::path::Path) -> (Vec<u8>, String) {
 
 async fn serve(archive: Vec<u8>, sum: String, bad_sum: bool) -> String {
     let sum = if bad_sum {
-        format!("{}0{}", &sum[..10], &sum[11..])
+        // Change one digit to one it is not, so the sum is wrong whatever
+        // it was (a fixed `0` matched the real digit one run in sixteen).
+        let digit = if &sum[10..11] == "0" { "1" } else { "0" };
+        format!("{}{digit}{}", &sum[..10], &sum[11..])
     } else {
         sum
     };
