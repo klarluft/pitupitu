@@ -237,8 +237,14 @@ enum PlaceCmd {
 enum SkillCmd {
     /// Print SKILL.md (same as `pitupitu --skill`).
     Print,
-    /// Install it for Claude Code (~/.claude/skills) and Codex (~/.codex/skills).
+    /// Install it for both Claude Code (~/.claude/skills) and Codex
+    /// (~/.codex/skills), even one that is not on this machine yet, and
+    /// bring pitupitu's own copies up to date. A copy someone wrote
+    /// themselves (without pitupitu's `managed-by` marker) is left alone.
     Install,
+    /// Each copy and whether it is current, outdated, unmanaged (not
+    /// pitupitu's) or missing.
+    Status,
 }
 
 #[tokio::main]
@@ -255,7 +261,7 @@ async fn main() -> Result<()> {
     let path = cli.config.unwrap_or_else(config::default_path);
     let as_json = cli.json;
     if cli.skill {
-        print!("{}", skill::SKILL);
+        print!("{}", skill::text());
         return Ok(());
     }
     let Some(cmd) = cli.cmd else {
@@ -481,10 +487,25 @@ async fn main() -> Result<()> {
         }
         Cmd::Skill { action } => {
             match action {
-                SkillCmd::Print => print!("{}", skill::SKILL),
+                SkillCmd::Print => print!("{}", skill::text()),
                 SkillCmd::Install => {
-                    for f in skill::install(&config::home_dir())? {
-                        eprintln!("wrote {}", f.display());
+                    let done = skill::sync(&config::home_dir(), skill::Mode::Everywhere)?;
+                    if done.is_empty() {
+                        eprintln!("the skill is up to date");
+                    }
+                    for d in done {
+                        eprintln!("{}", d.line());
+                    }
+                }
+                SkillCmd::Status => {
+                    let copies = skill::status(&config::home_dir());
+                    if as_json {
+                        println!("{}", json!({"copies": copies}));
+                    } else {
+                        for c in copies {
+                            let state = serde_json::to_value(c.state)?;
+                            println!("{:<9} {}", state.as_str().unwrap_or(""), c.path.display());
+                        }
                     }
                 }
             }
@@ -557,6 +578,16 @@ fn done(settings: &Value, as_json: bool, what: &str) {
 }
 
 async fn connect(cfg: &Config) -> Result<()> {
+    // The skill as this version has it, for the agents' own copies; an
+    // update restarts the service, so this is also how one reaches them.
+    match skill::sync(&config::home_dir(), skill::Mode::Refresh) {
+        Ok(done) => {
+            for d in done {
+                tracing::info!("skill: {}", d.line());
+            }
+        }
+        Err(e) => tracing::warn!("skill: could not refresh: {e:#}"),
+    }
     let Some(api_key) = cfg.api_key.clone() else {
         bail!("this box is not signed in; run `pitupitu setup`");
     };
@@ -715,30 +746,37 @@ async fn setup(
     config::set(path, &[("home", "path", &home.display().to_string())])?;
     eprintln!("  pitupitu's folder: {}", home.display());
 
-    // 3. The skill, offered once to a person at a terminal.
-    let skill_file = config::home_dir().join(".claude/skills/pitupitu/SKILL.md");
-    if !skill_file.exists() {
-        if std::io::stdin().is_terminal() {
+    // 3. The skill: offered once to a person at a terminal; once there,
+    // written for the agents on this machine and kept up to date.
+    let user_home = config::home_dir();
+    let offered = skill::any_installed(&user_home);
+    let terminal = std::io::stdin().is_terminal();
+    let wanted = offered
+        || terminal && {
             eprintln!();
-            if ask_yes(
+            ask_yes(
                 "Let Claude Code and Codex change pitupitu's settings for you? (installs a skill)",
                 true,
-            ) {
-                let files: Vec<_> = skill::install(&config::home_dir())?
-                    .iter()
-                    .map(|f| f.display().to_string())
-                    .collect();
-                eprintln!(
-                    "  ok, Claude Code and Codex know how now (wrote {})",
-                    files.join(", ")
-                );
-            }
-        } else {
-            eprintln!(
-                "  to let Claude Code and Codex change pitupitu's settings for you, run: \
+            )
+        };
+    if wanted {
+        match skill::sync(&user_home, skill::Mode::Install) {
+            Ok(done) if done.is_empty() && !offered => eprintln!(
+                "  no Claude Code or Codex on this machine yet; once there is, run: \
                  pitupitu skill install"
-            );
+            ),
+            Ok(done) => {
+                for d in done {
+                    eprintln!("  {}", d.line());
+                }
+            }
+            Err(e) => eprintln!("  could not install the skill: {e:#}"),
         }
+    } else if !terminal {
+        eprintln!(
+            "  to let Claude Code and Codex change pitupitu's settings for you, run: \
+             pitupitu skill install"
+        );
     }
 
     // 4. History: on by default, said in one line, not asked.
@@ -1202,6 +1240,9 @@ async fn status(cfg: &Config) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod skill_drift;
 
 #[cfg(test)]
 mod tests {

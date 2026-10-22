@@ -1,6 +1,9 @@
 ---
 name: pitupitu
 description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), or check pitupitu's status.
+metadata:
+  managed-by: pitupitu
+  version: "{{version}}"
 ---
 
 # pitupitu
@@ -41,6 +44,10 @@ Change preferences by reading them first (`pitupitu prefs --json`), editing the 
 ## Updating
 
 `pitupitu update --check` says whether a newer release of the box agent exists (`--json` for `{"current","latest","update_available"}`); `pitupitu update herdr --check` the same for herdr, `pitupitu update all --check` for both. `pitupitu update [herdr|all]` installs it the way it was installed (Homebrew, or the installer): it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking, and `--handoff` (restart herdr's server on the new version now) only when they asked for that. Sessions keep running through an update: only the box agent restarts, and herdr's running server stays as it is unless handed off.
+
+## This skill
+
+pitupitu keeps this skill in step with itself: setup installs it for the agents on this machine, and the box agent refreshes its own copies each time it starts (so after an update too). `pitupitu skill status` says, for each copy, whether it is `current`, `outdated`, `unmanaged` (someone wrote their own; pitupitu leaves it alone) or `missing`; `pitupitu skill install` writes it for Claude Code and Codex now. A copy that still has `managed-by: pitupitu` in its metadata is replaced at the next start, so to keep changes of your own, delete that line first.
 
 ## Not here
 
