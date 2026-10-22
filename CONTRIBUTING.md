@@ -14,6 +14,7 @@ cargo test
 - The box link is a contract with pitupitu cloud ([docs/box-link.md](docs/box-link.md)). A new call needs a protocol bump; never widen what the cloud can do on the box beyond named, typed calls.
 - When testing against a live herdr by hand, use a named session (`herdr --session <name>`), create your own workspaces and tabs, and stop and delete the session afterwards; don't touch panes you didn't create.
 - Tests that need a live herdr start a server in a throwaway named session and stop and delete it afterwards, so they never touch your own herdr; they skip when `herdr` is not on PATH. `PITUPITU_HERDR_SESSION=<name>` points the box agent itself at a named session the same way (for trying it out, not for use). `PITUPITU_LIVE_HERDR=1 cargo test --test conformance` also runs the session scenario (`docs/sessions.md`) with the signed-in Claude Code on your machine, in a temporary folder, and should pass before a release.
+- A change to the CLI (a command, an argument, a flag) updates `skill/SKILL.md` in the same pull request; `cargo test` checks that every `pitupitu …` command the skill shows parses and that every command is in it.
 - Logs carry metadata only: never prompts, agent output or file contents.
 
 ## Releasing

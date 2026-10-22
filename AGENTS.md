@@ -9,6 +9,7 @@ The open-source agent that runs on the user's machine and links their coding age
 - herdr runs the person's own, unmodified agent CLIs; the box never reads their credentials or adds permission flags. Keep it that way.
 - The box starts herdr's server when none answers and never stops one. It never updates itself or herdr unasked.
 - The cloud may only do what a named call allows; no shell, no arbitrary herdr command.
+- The skill (`skill/SKILL.md`) is the agents' manual for the CLI: a CLI change updates it in the same change. The tests in `crates/pitupitu/src/skill_drift.rs` fail when a command it shows does not parse or a command is missing from it.
 - Logs: metadata only, never prompts, agent output or file contents.
 - Live herdr tests: a throwaway named session (`herdr --session`), started and then stopped and deleted by the test; never the person's own session. Inside it, create your own workspace or tab and close it.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` clean before committing. Commits are signed off (DCO).
