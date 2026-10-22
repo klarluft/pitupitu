@@ -4,15 +4,17 @@
 //! installs the user service; `connect` is what the service runs; `update`
 //! updates the box agent or herdr when the person asks; `prefs`, `box`,
 //! `default` and `settings` change the account's settings; `follow`,
-//! `unfollow` and `sessions` choose which sessions pitupitu follows; `--skill`
-//! teaches the person's agents all of this.
+//! `unfollow` and `sessions` choose which sessions pitupitu follows; `todo`,
+//! `idea`, `remind`, `schedule` and `when` keep the person's list, reminders
+//! and schedules; `--skill` teaches the person's agents all of this.
 
 use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
 use pitupitu::{
-    config, device, herdr_box, home, inventory, link, service, sessions, settings, skill, update,
+    config, device, herdr_box, home, inventory, link, list, service, sessions, settings, skill,
+    update,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
@@ -29,7 +31,7 @@ struct Cli {
     /// Config file (default: $PITUPITU_CONFIG or ~/.config/pitupitu/pitupitu.toml).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
-    /// Print JSON instead of text (settings commands).
+    /// Print JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
     /// Print the skill that teaches an agent to install and configure pitupitu.
@@ -171,6 +173,171 @@ enum Cmd {
     Skill {
         #[command(subcommand)]
         action: SkillCmd,
+    },
+    /// The list: things to do and ideas. With nothing after it, the open ones.
+    #[command(args_conflicts_with_subcommands = true)]
+    Todo {
+        #[command(subcommand)]
+        action: Option<TodoCmd>,
+        #[command(flatten)]
+        list: TodoList,
+    },
+    /// Put an idea on the list (the same as `pitupitu todo add --idea`).
+    Idea {
+        #[arg(required = true)]
+        text: Vec<String>,
+        /// It is about the project of the current folder.
+        #[arg(long, conflicts_with = "project")]
+        here: bool,
+        /// It is about this project (its name or key).
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// A reminder (`pitupitu remind "tomorrow 9am" call the bank`): the
+    /// first argument is the whole time, quoted when it has spaces.
+    Remind {
+        /// When: "in 20 minutes", 20m, "tomorrow 9am", "every monday 8:30", …
+        when: String,
+        /// What to remind you of.
+        #[arg(required = true)]
+        text: Vec<String>,
+        /// The list item it is about (its id).
+        #[arg(long)]
+        todo: Option<String>,
+    },
+    /// Reminders and scheduled sessions. With nothing after it, all of them.
+    Schedule {
+        #[command(subcommand)]
+        action: Option<ScheduleCmd>,
+    },
+    /// What a time phrase means to pitupitu; nothing is made.
+    When {
+        #[arg(required = true)]
+        phrase: Vec<String>,
+    },
+}
+
+#[derive(clap::Args)]
+struct TodoList {
+    /// Open and done items.
+    #[arg(long, conflicts_with = "done")]
+    all: bool,
+    /// Done and dropped items.
+    #[arg(long)]
+    done: bool,
+    /// Ideas only.
+    #[arg(long)]
+    ideas: bool,
+    /// Only the project of the current folder.
+    #[arg(long)]
+    here: bool,
+    /// Only items with all these words.
+    words: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum TodoCmd {
+    /// The open items (the default).
+    List(TodoList),
+    /// Put something on the list.
+    Add {
+        #[arg(required = true)]
+        text: Vec<String>,
+        /// An idea (something to think about) rather than something to do.
+        #[arg(long)]
+        idea: bool,
+        /// It is about the project of the current folder.
+        #[arg(long, conflicts_with = "project")]
+        here: bool,
+        /// It is about this project (its name or key).
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Mark an item done (its id, or words from it).
+    Done {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+    /// Drop an item: not going to do it.
+    Drop {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+    /// Open a done or dropped item again.
+    Reopen {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+    /// Remove an item from the list for good.
+    Rm {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Every reminder and schedule (the default).
+    List,
+    /// Start a session at a time, or again and again
+    /// (`pitupitu schedule add "every weekday 9am" --place acme -- check the deploys`).
+    /// Asks first, naming the time it understood.
+    Add {
+        /// When, quoted when it has spaces.
+        when: String,
+        /// The folder: a named place or a project.
+        #[arg(long)]
+        place: String,
+        /// claude or codex (default: as a session started then would get).
+        #[arg(long)]
+        agent: Option<String>,
+        /// The model, as the agent's CLI names it.
+        #[arg(long)]
+        model: Option<String>,
+        /// The machine (default: this one).
+        #[arg(long = "box")]
+        box_name: Option<String>,
+        /// A few words to know it by.
+        #[arg(long)]
+        title: Option<String>,
+        /// Do not ask (needed when there is no terminal).
+        #[arg(long)]
+        yes: bool,
+        /// The prompt the session starts with, after `--`.
+        #[arg(last = true, required = true)]
+        prompt: Vec<String>,
+    },
+    /// A digest of your work at a time, or again and again. Asks first.
+    Digest {
+        #[arg(required = true)]
+        when: Vec<String>,
+        /// Do not ask (needed when there is no terminal).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Pause one (its id, or words from its title).
+    Pause {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+    /// Start a paused one again; a scheduled session asks first.
+    Resume {
+        #[arg(required = true)]
+        item: Vec<String>,
+        /// Do not ask (needed when there is no terminal).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove one for good.
+    Rm {
+        #[arg(required = true)]
+        item: Vec<String>,
+    },
+    /// Move its next time (`pitupitu schedule snooze 3f9a2c "in 2 hours"`):
+    /// the id or words, then the time, quoted when it has spaces.
+    Snooze {
+        #[arg(num_args = 2.., required = true, value_names = ["ITEM", "WHEN"])]
+        args: Vec<String>,
     },
 }
 
@@ -511,7 +678,411 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Todo { action, list } => {
+            let action = action.unwrap_or(TodoCmd::List(list));
+            plans(&Config::load(&path)?, Plan::Todo(action), as_json).await
+        }
+        Cmd::Idea {
+            text,
+            here,
+            project,
+        } => {
+            let add = TodoCmd::Add {
+                text,
+                idea: true,
+                here,
+                project,
+            };
+            plans(&Config::load(&path)?, Plan::Todo(add), as_json).await
+        }
+        Cmd::Remind { when, text, todo } => {
+            plans(
+                &Config::load(&path)?,
+                Plan::Remind { when, text, todo },
+                as_json,
+            )
+            .await
+        }
+        Cmd::Schedule { action } => {
+            let action = action.unwrap_or(ScheduleCmd::List);
+            plans(&Config::load(&path)?, Plan::Schedule(action), as_json).await
+        }
+        Cmd::When { phrase } => {
+            plans(&Config::load(&path)?, Plan::When(phrase.join(" ")), as_json).await
+        }
     }
+}
+
+/// The list's commands, which share how they fail.
+enum Plan {
+    Todo(TodoCmd),
+    Remind {
+        when: String,
+        text: Vec<String>,
+        todo: Option<String>,
+    },
+    Schedule(ScheduleCmd),
+    When(String),
+}
+
+/// Exit 2: pitupitu could not tell which item was meant, or there is no
+/// terminal to ask on.
+fn exit_unsure(said: &str) -> ! {
+    eprintln!("{}", said.trim_end());
+    std::process::exit(2);
+}
+
+/// Run one of the list's commands. What the cloud refuses is printed in
+/// its own words (exit 1; exit 2 when an id matched more than one item).
+async fn plans(cfg: &Config, plan: Plan, as_json: bool) -> Result<()> {
+    let r = match plan {
+        Plan::Todo(c) => todo_cmd(cfg, c, as_json).await,
+        Plan::Remind { when, text, todo } => remind_cmd(cfg, when, text, todo, as_json).await,
+        Plan::Schedule(c) => schedule_cmd(cfg, c, as_json).await,
+        Plan::When(phrase) => {
+            let body = list::when(cfg, &phrase, None).await;
+            body.map(|b| {
+                if as_json {
+                    println!("{b:#}");
+                } else {
+                    println!("{}", b["words"].as_str().unwrap_or(""));
+                }
+            })
+        }
+    };
+    let Err(e) = r else {
+        return Ok(());
+    };
+    match e.downcast_ref::<list::Refused>() {
+        Some(r) if r.kind == "ambiguous" => {
+            let mut said = r.message.clone();
+            for m in &r.matches {
+                said.push_str(&format!("\n  {m}"));
+            }
+            exit_unsure(&said)
+        }
+        Some(r) => {
+            eprintln!("{}", r.message);
+            std::process::exit(1);
+        }
+        None => Err(e),
+    }
+}
+
+/// The text a command was given, as one line.
+fn text_of(words: &[String]) -> String {
+    words.join(" ").trim().to_string()
+}
+
+/// The JSON body, or a line for a person.
+fn show(body: &Value, as_json: bool, line: impl FnOnce(&Value) -> String) {
+    if as_json {
+        println!("{body:#}");
+    } else {
+        println!("{}", line(body));
+    }
+}
+
+async fn todo_cmd(cfg: &Config, cmd: TodoCmd, as_json: bool) -> Result<()> {
+    let (item, status, done_word) = match cmd {
+        TodoCmd::List(l) => {
+            let status = if l.all {
+                "all"
+            } else if l.done {
+                "done"
+            } else {
+                "open"
+            };
+            let mut q = vec![("status", status.to_string())];
+            if l.ideas {
+                q.push(("kind", "idea".to_string()));
+            }
+            if l.here {
+                q.push(("project", list::Here::current()?.key(&cfg.box_name())));
+            }
+            let words = text_of(&l.words);
+            if !words.is_empty() {
+                q.push(("q", words));
+            }
+            let body = list::todos(cfg, &q).await?;
+            if as_json {
+                println!("{body:#}");
+            } else {
+                print!("{}", list::todo_table(&body));
+            }
+            return Ok(());
+        }
+        TodoCmd::Add {
+            text,
+            idea,
+            here,
+            project,
+        } => {
+            let mut b = serde_json::Map::new();
+            b.insert("text".into(), json!(text_of(&text)));
+            b.insert("kind".into(), json!(if idea { "idea" } else { "todo" }));
+            if let Some(p) = project {
+                b.insert("project".into(), json!(p));
+            }
+            if here {
+                list::Here::current()?.fields(&mut b);
+            }
+            b.insert("via".into(), json!(list::via()));
+            let t = list::add_todo(cfg, &Value::Object(b)).await?;
+            show(&t, as_json, |t| {
+                format!(
+                    "Added {}: {}",
+                    list::short(t),
+                    t["text"].as_str().unwrap_or("")
+                )
+            });
+            return Ok(());
+        }
+        TodoCmd::Done { item } => (item, Some("done"), "Done"),
+        TodoCmd::Drop { item } => (item, Some("dropped"), "Dropped"),
+        TodoCmd::Reopen { item } => (item, Some("open"), "Reopened"),
+        TodoCmd::Rm { item } => (item, None, "Removed"),
+    };
+    // Words are matched among the open items (`reopen`: the done ones),
+    // an id among all of them.
+    let query = text_of(&item);
+    let all = list::todo_rows(&list::todos(cfg, &[("status", "all".into())]).await?);
+    let reopening = status == Some("open");
+    let eligible = |t: &Value| (t["status"] == "open") != reopening;
+    let (id, known) = match list::pick(&all, &query, "text", eligible) {
+        list::Pick::One(t) => (t["id"].as_str().unwrap_or_default().to_string(), Some(t)),
+        list::Pick::Id(id) => (id, None),
+        list::Pick::None => exit_unsure(&format!(
+            "Nothing on the list matches \"{query}\"; `pitupitu todo{}` lists them.",
+            if reopening { " --done" } else { "" }
+        )),
+        list::Pick::Many(hits) => exit_unsure(&format!(
+            "\"{query}\" matches more than one item; name it by more of its words or by its id:\n{}",
+            list::choices(&hits, "text")
+        )),
+    };
+    let body = match status {
+        Some(s) => list::change_todo(cfg, &id, &json!({"status": s})).await?,
+        None => {
+            list::remove_todo(cfg, &id).await?;
+            json!({"removed": known.map_or(id.clone(), |t| t["id"].as_str().unwrap_or("").to_string())})
+        }
+    };
+    let shown = if body["id"].is_string() {
+        &body
+    } else {
+        known.unwrap_or(&body)
+    };
+    show(&body, as_json, |_| {
+        let short = if shown["id"].is_string() {
+            list::short(shown)
+        } else {
+            id.clone()
+        };
+        match shown["text"].as_str() {
+            Some(t) => format!("{done_word} {short}: {t}"),
+            None => format!("{done_word} {short}."),
+        }
+    });
+    Ok(())
+}
+
+async fn remind_cmd(
+    cfg: &Config,
+    when: String,
+    text: Vec<String>,
+    todo: Option<String>,
+    as_json: bool,
+) -> Result<()> {
+    let text = text_of(&text);
+    let mut b =
+        json!({"when": when, "action": {"kind": "remind", "text": text}, "via": list::via()});
+    if let Some(t) = todo {
+        b["todo"] = json!(t);
+    }
+    let a = list::add_automation(cfg, &b).await?;
+    show(&a, as_json, |a| {
+        format!(
+            "Reminder {}: {}: {text}",
+            list::short(a),
+            a["words"].as_str().unwrap_or("")
+        )
+    });
+    Ok(())
+}
+
+/// Before a session or digest is scheduled: `--yes`, else the person's
+/// answer at a terminal. Without either, exit 2.
+fn agreed(yes: bool, question: impl FnOnce() -> Option<String>, cmd: &str) -> bool {
+    if yes {
+        return true;
+    }
+    if !std::io::stdin().is_terminal() {
+        exit_unsure(&format!(
+            "No terminal to ask on: read the time back to the person and, once they said yes, \
+             run it again with --yes ({cmd} … --yes)."
+        ));
+    }
+    match question() {
+        Some(q) => ask_yes(&q, false),
+        None => false,
+    }
+}
+
+async fn schedule_cmd(cfg: &Config, cmd: ScheduleCmd, as_json: bool) -> Result<()> {
+    match cmd {
+        ScheduleCmd::List => {
+            let body = list::automations(cfg).await?;
+            if as_json {
+                println!("{body:#}");
+            } else {
+                print!("{}", list::automation_table(&body));
+            }
+        }
+        ScheduleCmd::Add {
+            when,
+            place,
+            agent,
+            model,
+            box_name,
+            title,
+            yes,
+            prompt,
+        } => {
+            let agent = agent.map(|a| a.trim().to_lowercase());
+            let shown_box = box_name.clone().unwrap_or_else(|| cfg.box_name());
+            let prompt = text_of(&prompt);
+            // Asked before anything is made: the time as pitupitu read it.
+            let mut asked = None;
+            if !yes && std::io::stdin().is_terminal() {
+                let w = list::when(cfg, &when, Some("start_session")).await?;
+                asked = Some(list::session_question(
+                    agent.as_deref(),
+                    &place,
+                    &shown_box,
+                    w["words"].as_str().unwrap_or(&when),
+                ));
+                eprintln!("  It starts with: {prompt}");
+            }
+            if !agreed(yes, || asked, "pitupitu schedule add") {
+                eprintln!("Nothing scheduled.");
+                return Ok(());
+            }
+            let mut action = json!({"kind": "start_session", "place": place, "prompt": prompt});
+            for (k, v) in [("box", box_name), ("agent", agent), ("model", model)] {
+                if let Some(v) = v {
+                    action[k] = json!(v);
+                }
+            }
+            let mut b = json!({"when": when, "action": action, "via": list::via()});
+            if let Some(t) = title {
+                b["title"] = json!(t);
+            }
+            if let Some(p) = std::env::var(sessions::PANE_ENV)
+                .ok()
+                .filter(|p| !p.is_empty())
+            {
+                b["pane"] = json!(p);
+            }
+            let a = list::add_automation(cfg, &b).await?;
+            show(&a, as_json, |a| {
+                format!("Scheduled {}", list::automation_line(a))
+            });
+        }
+        ScheduleCmd::Digest { when, yes } => {
+            let when = text_of(&when);
+            let mut asked = None;
+            if !yes && std::io::stdin().is_terminal() {
+                let w = list::when(cfg, &when, Some("digest")).await?;
+                asked = Some(list::digest_question(w["words"].as_str().unwrap_or(&when)));
+            }
+            if !agreed(yes, || asked, "pitupitu schedule digest") {
+                eprintln!("Nothing scheduled.");
+                return Ok(());
+            }
+            let b = json!({"when": when, "action": {"kind": "digest"}, "via": list::via()});
+            let a = list::add_automation(cfg, &b).await?;
+            show(&a, as_json, |a| {
+                format!("Scheduled {}", list::automation_line(a))
+            });
+        }
+        ScheduleCmd::Pause { item } => {
+            let (id, _) = pick_automation(cfg, &text_of(&item), |a| a["enabled"] != false).await?;
+            let a = list::change_automation(cfg, &id, &json!({"enabled": false})).await?;
+            show(&a, as_json, |a| {
+                format!("Paused {}", list::automation_line(a))
+            });
+        }
+        ScheduleCmd::Resume { item, yes } => {
+            let (id, known) =
+                pick_automation(cfg, &text_of(&item), |a| a["enabled"] == false).await?;
+            let session = known
+                .as_ref()
+                .is_some_and(|a| a["action"]["kind"] == "start_session");
+            if session {
+                let a = known.as_ref().expect("known");
+                let question = || {
+                    Some(list::session_question(
+                        a["action"]["agent"].as_str(),
+                        a["action"]["place"].as_str().unwrap_or("?"),
+                        a["action"]["box"].as_str().unwrap_or("?"),
+                        a["words"].as_str().unwrap_or(""),
+                    ))
+                };
+                if !agreed(yes, question, "pitupitu schedule resume") {
+                    eprintln!("Left paused.");
+                    return Ok(());
+                }
+            }
+            let a = list::change_automation(cfg, &id, &json!({"enabled": true})).await?;
+            show(&a, as_json, |a| {
+                format!("Resumed {}", list::automation_line(a))
+            });
+        }
+        ScheduleCmd::Rm { item } => {
+            let (id, known) = pick_automation(cfg, &text_of(&item), |_| true).await?;
+            list::remove_automation(cfg, &id).await?;
+            let body =
+                json!({"removed": known.as_ref().and_then(|a| a["id"].as_str()).unwrap_or(&id)});
+            show(&body, as_json, |_| match &known {
+                Some(a) => format!("Removed {}", list::automation_line(a)),
+                None => format!("Removed {id}."),
+            });
+        }
+        ScheduleCmd::Snooze { mut args } => {
+            let when = args.pop().unwrap_or_default();
+            let (id, _) = pick_automation(cfg, &text_of(&args), |a| a["enabled"] != false).await?;
+            let a = list::change_automation(cfg, &id, &json!({"snooze": when})).await?;
+            show(&a, as_json, |a| {
+                format!("Snoozed {}", list::automation_line(a))
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The schedule an `<id | words>` names: an id among all, words from the
+/// titles of those `eligible` keeps. Exits 2 when that is not one.
+async fn pick_automation(
+    cfg: &Config,
+    query: &str,
+    eligible: impl Fn(&Value) -> bool,
+) -> Result<(String, Option<Value>)> {
+    let all = list::automation_rows(&list::automations(cfg).await?);
+    Ok(match list::pick(&all, query, "title", eligible) {
+        list::Pick::One(a) => (
+            a["id"].as_str().unwrap_or_default().to_string(),
+            Some(a.clone()),
+        ),
+        list::Pick::Id(id) => (id, None),
+        list::Pick::None => exit_unsure(&format!(
+            "No reminder or schedule matches \"{query}\"; `pitupitu schedule` lists them."
+        )),
+        list::Pick::Many(hits) => exit_unsure(&format!(
+            "\"{query}\" matches more than one; name it by more of its title or by its id:\n{}",
+            list::choices(&hits, "title")
+        )),
+    })
 }
 
 /// `pitupitu follow` / `unfollow`: the session named, or the one this

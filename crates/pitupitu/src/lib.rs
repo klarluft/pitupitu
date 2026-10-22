@@ -9,6 +9,7 @@ pub mod history;
 pub mod home;
 pub mod inventory;
 pub mod link;
+pub mod list;
 pub mod service;
 pub mod sessions;
 pub mod settings;
