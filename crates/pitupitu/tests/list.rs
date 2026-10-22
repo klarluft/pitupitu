@@ -365,14 +365,20 @@ async fn here_is_the_repository_or_the_folder() {
     );
     assert_eq!(
         asked[1].1,
-        "/v1/todos?status=open&project=github.com%2FOrg%2Facme-api"
+        format!(
+            "/v1/todos?status=open&remote={}&cwd={}",
+            url_encode("https://GitHub.com/Org/acme-api.git"),
+            url_encode(&root_s)
+        )
     );
     assert_eq!(
         asked[2].2,
         json!({"text": "notes", "kind": "idea", "cwd": plain_s, "via": "agent"})
     );
-    let key: String = url_encode(&format!("testbox:{plain_s}"));
-    assert_eq!(asked[3].1, format!("/v1/todos?status=open&project={key}"));
+    assert_eq!(
+        asked[3].1,
+        format!("/v1/todos?status=open&cwd={}", url_encode(&plain_s))
+    );
 }
 
 fn url_encode(s: &str) -> String {

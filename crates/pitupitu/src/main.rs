@@ -798,7 +798,7 @@ async fn todo_cmd(cfg: &Config, cmd: TodoCmd, as_json: bool) -> Result<()> {
                 q.push(("kind", "idea".to_string()));
             }
             if l.here {
-                q.push(("project", list::Here::current()?.key(&cfg.box_name())));
+                q.extend(list::Here::current()?.query());
             }
             let words = text_of(&l.words);
             if !words.is_empty() {

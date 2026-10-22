@@ -142,43 +142,14 @@ impl Here {
         into.insert("cwd".into(), json!(self.cwd.to_string_lossy()));
     }
 
-    /// The project key the cloud files it under: the remote as
-    /// `host/path`, else `<box>:<folder>`.
-    pub fn key(&self, box_name: &str) -> String {
-        match &self.remote {
-            Some(r) => project_key(r),
-            None => format!("{box_name}:{}", self.cwd.display()),
+    /// The same as query parameters, for listing this project's items.
+    pub fn query(&self) -> Vec<(&'static str, String)> {
+        let mut q = Vec::new();
+        if let Some(r) = &self.remote {
+            q.push(("remote", r.clone()));
         }
-    }
-}
-
-/// A git remote as `host/path`: no scheme, user info, port or trailing
-/// `.git`, the host in lower case (`git@github.com:Org/Repo.git` is
-/// `github.com/Org/Repo`).
-pub fn project_key(remote: &str) -> String {
-    let r = remote.trim();
-    let (host, path) = match r.find("://") {
-        Some(i) => {
-            let rest = &r[i + 3..];
-            let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
-            let host = auth.rsplit_once('@').map_or(auth, |(_, h)| h);
-            (host.split(':').next().unwrap_or(host), path)
-        }
-        None => {
-            // scp-like: [user@]host:path
-            let rest = match (r.find('@'), r.find(':')) {
-                (Some(at), Some(colon)) if at < colon => &r[at + 1..],
-                _ => r,
-            };
-            rest.split_once(':').unwrap_or(("", rest))
-        }
-    };
-    let path = path.trim_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    if host.is_empty() {
-        path.to_string()
-    } else {
-        format!("{}/{path}", host.to_lowercase())
+        q.push(("cwd", self.cwd.to_string_lossy().into_owned()));
+        q
     }
 }
 
@@ -449,27 +420,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remotes_become_project_keys() {
-        for (remote, key) in [
-            ("git@github.com:Org/Repo.git", "github.com/Org/Repo"),
-            ("https://GitHub.com/Org/Repo.git", "github.com/Org/Repo"),
-            ("https://me@github.com/Org/Repo/", "github.com/Org/Repo"),
-            (
-                "ssh://git@git.example.com:2222/team/app.git",
-                "git.example.com/team/app",
-            ),
-            ("gitlab.com:group/sub/app", "gitlab.com/group/sub/app"),
-        ] {
-            assert_eq!(project_key(remote), key, "{remote}");
-        }
-        let here = Here {
+    fn here_as_a_body_and_as_a_query() {
+        let plain = Here {
             remote: None,
             cwd: "/home/me/notes".into(),
         };
-        assert_eq!(here.key("laptop"), "laptop:/home/me/notes");
         let mut m = Map::new();
-        here.fields(&mut m);
+        plain.fields(&mut m);
         assert_eq!(Value::Object(m), json!({"cwd": "/home/me/notes"}));
+        assert_eq!(plain.query(), [("cwd", "/home/me/notes".to_string())]);
+        let repo = Here {
+            remote: Some("git@github.com:o/r.git".into()),
+            cwd: "/w/r".into(),
+        };
+        assert_eq!(
+            repo.query(),
+            [
+                ("remote", "git@github.com:o/r.git".to_string()),
+                ("cwd", "/w/r".to_string())
+            ]
+        );
     }
 
     fn list() -> Vec<Value> {
