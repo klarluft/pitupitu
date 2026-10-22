@@ -13,6 +13,14 @@ use tracing::{debug, warn};
 /// How long the screen must hold still after `idle` before an agent counts
 /// as ready for a prompt.
 const SETTLE: Duration = Duration::from_millis(1500);
+/// How long a new pane's screen must hold still before its shell counts as
+/// started. A shell with an instant prompt (Powerlevel10k) draws one at
+/// once and redraws it half a second later, when its startup files are
+/// done; a command typed before then can be lost.
+const SHELL_SETTLE: Duration = Duration::from_millis(800);
+/// Longest wait for a new pane's shell before `agent start` is tried
+/// anyway (herdr then says whether it is ready).
+const SHELL_WAIT: Duration = Duration::from_secs(10);
 
 /// Drives herdr by shelling out to its CLI.
 ///
@@ -210,6 +218,33 @@ impl HerdrCli {
         }
     }
 
+    /// Wait until a new pane's shell has started: its screen shows
+    /// something and has held still for [`SHELL_SETTLE`], or `deadline`
+    /// passed. Agents are started in panes made a moment before, and
+    /// herdr refuses (`agent_pane_busy`) or loses the command while the
+    /// shell is still reading its startup files.
+    async fn shell_started(&self, pane: &PaneId, deadline: std::time::Instant) {
+        let mut last = String::new();
+        let mut since = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            let Ok(screen) = self
+                .run_text(&[
+                    "pane", "read", &pane.0, "--source", "visible", "--lines", "40",
+                ])
+                .await
+            else {
+                return;
+            };
+            if screen != last || blank(&screen) {
+                last = screen;
+                since = std::time::Instant::now();
+            } else if since.elapsed() >= SHELL_SETTLE {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+
     /// The folder trust dialog, answered without changing how the agent
     /// asks for permission ([`crate::detect::trust_keys`]): Claude Code's
     /// "Yes, I trust this folder", Codex's "No, ask me to approve".
@@ -399,7 +434,22 @@ impl AgentHost for HerdrCli {
             args.push("--");
             args.extend(opts.agent_args.iter().map(String::as_str));
         }
-        match self.run_json(&args).await {
+        let settle = opts.timeout.unwrap_or(Duration::from_secs(30));
+        let shell_deadline = std::time::Instant::now() + SHELL_WAIT.min(settle);
+        self.shell_started(pane, shell_deadline).await;
+        let started = loop {
+            match self.run_json(&args).await {
+                Err(e)
+                    if e.code() == Some("agent_pane_busy")
+                        && std::time::Instant::now() < shell_deadline =>
+                {
+                    debug!(pane = %pane.0, "shell not ready yet; trying again");
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                other => break other,
+            }
+        };
+        match started {
             Ok(_) => {}
             Err(e) if e.code() == Some("agent_not_ready") => {
                 // The name is registered; the agent is sitting on a dialog.
@@ -418,7 +468,6 @@ impl AgentHost for HerdrCli {
             }
             Err(e) => return Err(e),
         }
-        let settle = opts.timeout.unwrap_or(Duration::from_secs(30));
         let deadline = std::time::Instant::now() + settle;
         let info = self
             .wait(name, &[AgentStatus::Idle, AgentStatus::Done], settle)

@@ -52,7 +52,10 @@ pub struct Link {
     /// herdr itself: its status, its server, its updates. `None` when a
     /// test stands in for herdr; the inventory's `herdr` is then null.
     pub keeper: Option<Arc<Keeper>>,
-    /// The agent CLIs found on `PATH` when the agent started.
+    /// The agent CLIs found on `PATH` when the agent started. With herdr
+    /// itself (`keeper`) they are looked for again on every connect and
+    /// every five minutes, so one installed later shows up; a test
+    /// standing in for herdr keeps these.
     pub available: Vec<Available>,
     /// Where the agents keep their session history (the user's home
     /// directory); `None` sends no recent folders and never reads the
@@ -202,7 +205,10 @@ impl Link {
             } else {
                 Vec::new()
             },
-            available: self.available.clone(),
+            available: match &self.keeper {
+                Some(_) => inventory::available().await,
+                None => self.available.clone(),
+            },
             recent: self.recent().await,
         };
         let mut hello = json!({
@@ -543,7 +549,8 @@ impl Polled {
 /// pitupitu files did, `inventory` when herdr starts or stops answering
 /// (starting its server when it does not); every minute, `inventory` when
 /// herdr's status changed; every five minutes when the recent folders
-/// did; every six hours when a newer release appeared.
+/// or the agent CLIs on `PATH` did; every six hours when a newer release
+/// appeared.
 async fn poll(
     mut p: Polled,
     mut up: bool,
@@ -578,6 +585,12 @@ async fn poll(
                 continue;
             }
             _ = recent_tick.tick() => {
+                if p.keeper.is_some() {
+                    let available = inventory::available().await;
+                    if !p.inventory(&tx, |i| i.available = available).await {
+                        return;
+                    }
+                }
                 if let Some(h) = p.history.clone() {
                     let recent = tokio::task::spawn_blocking(move || inventory::recent(&h))
                         .await
