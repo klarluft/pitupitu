@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: src
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       # The Homebrew formula, filled from the checksums just built;
