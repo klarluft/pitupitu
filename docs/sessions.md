@@ -39,6 +39,13 @@ the status turns idle a moment before the agent reads keys, and a prompt
 typed then is lost. So the screen must also hold still for about a second
 and a half.
 
+The pane is usually made a moment before, and its shell is not ready
+yet: herdr refuses with `agent_pane_busy`, or a shell with an instant
+prompt (Powerlevel10k) shows one at once and loses the command typed
+before its startup files are done. So `start_agent` first waits for the
+pane's screen to hold still for a moment (up to ten seconds) and tries
+again while herdr says `agent_pane_busy`.
+
 `completion_seq` is absent until the first turn completes; a comparison
 treats absent as lower than any value.
 
