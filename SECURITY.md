@@ -7,7 +7,7 @@ The box agent runs on your machine with your user's rights and holds a key that 
 Please do not open a public issue for a security problem.
 
 - Preferred: [report it privately on GitHub](https://github.com/klarluft/pitupitu/security/advisories/new) (Security → Report a vulnerability). You get a private thread with the maintainers.
-- Or email **privacy@pitupitu.chat**.
+- Or email **security@pitupitu.chat**.
 
 Include what you found, how to reproduce it, and the version (`pitupitu --version`). You will hear back within three working days. We ask that you give us a reasonable time to fix the problem before you talk about it publicly, and we will credit you in the release notes if you like.
 
