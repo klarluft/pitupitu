@@ -47,7 +47,7 @@ Change preferences by reading them first (`pitupitu prefs --json`), editing the 
 
 ## This skill
 
-pitupitu keeps this skill in step with itself: setup installs it for the agents on this machine, and the box agent refreshes its own copies each time it starts (so after an update too). `pitupitu skill status` says, for each copy, whether it is `current`, `outdated`, `unmanaged` (someone wrote their own; pitupitu leaves it alone) or `missing`; `pitupitu skill install` writes it for Claude Code and Codex now.
+pitupitu keeps this skill in step with itself: setup installs it for the agents on this machine, and the box agent refreshes its own copies each time it starts (so after an update too). `pitupitu skill status` says, for each copy, whether it is `current`, `outdated`, `unmanaged` (someone wrote their own; pitupitu leaves it alone) or `missing`; `pitupitu skill install` writes it for Claude Code and Codex now. A copy that still has `managed-by: pitupitu` in its metadata is replaced at the next start, so to keep changes of your own, delete that line first.
 
 ## Not here
 
