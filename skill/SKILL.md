@@ -1,6 +1,6 @@
 ---
 name: pitupitu
-description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), or check pitupitu's status.
+description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), note something for later on their list, set a reminder, schedule a session, or check pitupitu's status.
 metadata:
   managed-by: pitupitu
   version: "{{version}}"
@@ -40,6 +40,17 @@ Every command takes `--json` and never prompts when there is no terminal.
 When the person says to keep them posted on this session, to let pitupitu report on it, to tell them when it is done, or the like, run `pitupitu follow` with nothing after it, from inside this session: it follows the session you are in. Tell them it is done in one line. Use `pitupitu sessions` to see what is followed already.
 
 Change preferences by reading them first (`pitupitu prefs --json`), editing the text, and writing it back whole with `pitupitu prefs set -`; keep what the person did not ask to change.
+
+## The list, reminders and schedules
+
+The person's list (things to do and ideas), reminders and scheduled sessions live in their pitupitu account: their phone shows them, and pitupitu reminds them by voice or notification. Every command takes `--json`, never prompts without a terminal, and prints a short id (`3f9a2c`) for each item.
+
+- "Note this for later", "put it on my list": `pitupitu todo add <text>`. "Add an idea": `pitupitu idea <text>`. Add `--here` when it is about the repository you are working in (it sends this folder's git remote, else the folder), or `--project <name>`. Write the text so it makes sense to the person later, away from this session.
+- `pitupitu todo` lists the open items (`pitupitu todo list --here` this repository's only, `--all`, `--done`, `--ideas`, or words to filter). `pitupitu todo done|drop|reopen|rm <id>` takes an id or words from the item; when words match more than one it lists them and exits 2: pick by id.
+- "Remind me in an hour to check the deploy": `pitupitu remind "<when>" <text>`, the time first and quoted (`pitupitu remind "in 1 hour" check the deploy`, `pitupitu remind "tomorrow 9am" call the bank`). It prints the time it understood; say it back to the person in one line. `--todo <id>` ties it to an item on the list.
+- Times are plain phrases: `in 20 minutes`, `20m`, `5pm`, `tomorrow 9am`, `friday 14:30`, `every weekday at 9`, `every monday and thursday 8:30`, `every 2 hours`. `pitupitu when "<phrase>"` says what one means without making anything. If one is refused, rephrase it plainly or ask the person.
+- `pitupitu schedule [list]` lists reminders and schedules; `pitupitu schedule pause|resume|rm <id>` and `pitupitu schedule snooze <id> "<when>"` change one.
+- A scheduled session starts an agent later, or again and again, with no one at the keyboard: `pitupitu schedule add "<when>" --place <place> -- <prompt>` (`--agent`, `--model`, `--box`, `--title` optional). **Schedule one only when the person asked for that in so many words.** First run `pitupitu when "<when>"`, read the time, the machine, the folder and the prompt back to them, and only after they said yes run it with `--yes` (`pitupitu schedule add "<when>" --place <place> --yes -- <prompt>`); without `--yes` and no terminal it changes nothing and exits 2. Never schedule from a session that was itself started by a schedule. `pitupitu schedule digest "<when>"` (a summary of their work) and `pitupitu schedule resume <id>` of a session ask the same way.
 
 ## Updating
 
