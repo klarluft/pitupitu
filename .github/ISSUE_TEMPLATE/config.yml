@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/klarluft/pitupitu/security/advisories/new
+    about: Privately, to the maintainers. Please do not open a public issue for a security problem.
+  - name: pitupitu.chat
+    url: https://pitupitu.chat
+    about: What pitupitu is, how it works, pricing and the FAQ.
+  - name: Privacy
+    url: https://pitupitu.chat/privacy
+    about: What is stored, what is never stored, and how to delete it.

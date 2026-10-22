@@ -1,0 +1,49 @@
+name: Bug report
+description: Something the box agent does wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please leave out anything personal: the output of `pitupitu status` names your account and machines, so redact what you do not want public. For a security problem, use [Report a vulnerability](https://github.com/klarluft/pitupitu/security/advisories/new) instead of an issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran or said, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pitupitu version
+      description: "`pitupitu --version`"
+      placeholder: pitupitu 0.8.0
+    validations:
+      required: true
+  - type: input
+    id: herdr
+    attributes:
+      label: herdr version
+      description: "`herdr --version`, or as `pitupitu status` shows it"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 26.0 (Apple silicon) / Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed with
+      options:
+        - install script (pitupitu.chat/install)
+        - Homebrew
+        - cargo install / from source
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`journalctl --user -u pitupitu -n 200` on Linux, `~/Library/Logs/pitupitu.log` on macOS. They carry what happened, never prompts or agent output; still, read them before pasting."
+      render: text
