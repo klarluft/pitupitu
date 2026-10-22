@@ -1,0 +1,27 @@
+name: Feature request
+description: Something the box agent should do, or do differently
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is the agent that runs on your machines. Ideas about the conversation, the voice or the page at pitupitu.chat are welcome too; we pass them on.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation, in your words. What gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: What pitupitu should do, and where (the command line, by voice, on the page).
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Your setup, workarounds, links.

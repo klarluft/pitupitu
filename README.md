@@ -1,10 +1,68 @@
-# pitupitu
+<p align="center">
+  <a href="https://pitupitu.chat"><img src="assets/banner.png" alt="pitupitu: talk to your agents. Start, check on and unblock Claude Code and Codex by voice, from your phone, on any of your machines." width="100%"></a>
+</p>
 
-pitupitu lets you talk to your coding agents (Claude Code, Codex and the others) on any of your machines, by voice or text, from your phone or any browser. You say what you want and where; pitupitu starts the agent session, keeps an eye on it and tells you when it is done or needs you.
+<h1 align="center">pitupitu</h1>
+
+<p align="center">
+  <b>Talk to your coding agents, on any of your machines.</b><br>
+  Start, check on and unblock Claude Code and Codex by voice, from your phone or any browser.<br>
+  This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/klarluft/pitupitu/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/klarluft/pitupitu?label=release&color=c8371f"></a>
+  <a href="https://github.com/klarluft/pitupitu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/klarluft/pitupitu/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+  <a href="#install"><img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-555"></a>
+  <a href="https://github.com/klarluft/homebrew-tap"><img alt="Homebrew tap" src="https://img.shields.io/badge/homebrew-klarluft%2Ftap-f6a316"></a>
+  <a href="https://www.rust-lang.org"><img alt="Written in Rust" src="https://img.shields.io/badge/made%20with-Rust-dea584"></a>
+</p>
+
+<p align="center">
+  <a href="https://pitupitu.chat">Website</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="docs/box-link.md">Protocol</a> ·
+  <a href="https://pitupitu.chat/privacy">Privacy</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
+---
+
+You say what you want done and where. pitupitu starts the agent session on that machine, keeps an eye on it, answers what it can, and tells you when it is done or needs you. In the car, on a walk, at the desk: the same sessions, from your phone or any browser.
 
 pitupitu runs your agents in [herdr](https://herdr.dev), a terminal workspace manager for coding agents. Open `herdr` on that machine and you see exactly what your phone sees: the same sessions, live, to watch or type into at the desk. If herdr is not installed, pitupitu installs it.
 
-This repository is the part that runs on each of your machines: a small agent that links the machine to pitupitu cloud. The conversation, the voice and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
+This repository is the part that runs on each of your machines: a small Rust agent that links the machine to pitupitu cloud over one outbound WebSocket. The conversation, the voice and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
+
+<table>
+  <tr>
+    <td width="33%"><img src="assets/talk-phone.png" alt="The Talk screen on a phone: a conversation with pitupitu, and the line above the microphone naming the session that needs you"></td>
+    <td width="33%"><img src="assets/work-phone.png" alt="The Work screen on a phone: what needs you first, then what runs, on every machine"></td>
+    <td width="33%"><img src="assets/session-phone.png" alt="A session that asks: the question at the top, the answers as buttons, the terminal under it"></td>
+  </tr>
+  <tr>
+    <td><b>Talk.</b> Say it; it starts. The line above the microphone names what needs you.</td>
+    <td><b>Work.</b> What needs you first, then what runs, on every machine.</td>
+    <td><b>A session that asks.</b> The question at the top, the answers as buttons, the terminal under it.</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/talk-desk.png" alt="pitupitu on a wide screen: the work beside the conversation" width="100%">
+  <br><sub><b>On a wide screen.</b> The work beside the conversation; open <code>herdr</code> on the machine for the same sessions in your terminal.</sub>
+</p>
+
+## Quick start
+
+```sh
+curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/pitupitu
+pitupitu setup                                  # sign in with a code, pick a folder, start the service
+```
+
+Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need `claude` and/or `codex` (or another agent herdr knows) installed and signed in on that machine; pitupitu never touches their logins.
 
 ## How it works
 
@@ -39,6 +97,8 @@ or build from source with a recent stable Rust:
 ```sh
 cargo install --git https://github.com/klarluft/pitupitu pitupitu
 ```
+
+Release binaries are built for Linux (x86_64, arm64, static musl) and macOS (Intel, Apple silicon) and come with SHA-256 checksums on the [releases page](https://github.com/klarluft/pitupitu/releases).
 
 The install script and `pitupitu setup` install [herdr](https://herdr.dev) with its own installer when it is not on your `PATH`. A herdr you installed with Homebrew, mise or Nix is used as it is. You need `claude` and/or `codex` (or another agent herdr knows) installed and signed in.
 
@@ -125,6 +185,15 @@ Your sessions are not touched. The box agent's update restarts only the box agen
 
 `--check` only looks; `--yes` answers for you, for a script; `--no-restart` leaves the running service on the old version until you restart it. Updating from the page or by voice runs the same, after you said yes. The cloud accepts the current and the previous box protocol; an older box is told to update.
 
+## Privacy and security
+
+- The box only dials out; nothing listens on your machine, and the cloud can only make the named calls in [docs/box-link.md](docs/box-link.md).
+- Your agents' logins stay yours: pitupitu never reads or uses their credentials, and never adds permission flags.
+- Audio is never stored. Logs carry metadata only. What is kept, and how to delete it, is at [pitupitu.chat/privacy](https://pitupitu.chat/privacy).
+- Found a security problem? See [SECURITY.md](SECURITY.md).
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the [Apache License 2.0](LICENSE).
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for the checks, the release process and the DCO sign-off, and [docs/sessions.md](docs/sessions.md) for what every session state means. This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+Licensed under the [Apache License 2.0](LICENSE).
