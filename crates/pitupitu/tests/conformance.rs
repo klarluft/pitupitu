@@ -109,6 +109,28 @@ async fn scenario(host: &dyn AgentHost, cwd: &Path, name: &str, s: Script<'_>) {
     let text = host.read(name, 60).await.unwrap();
     assert!(text.contains(s.expect), "{text}");
 
+    // herdr names the agent's own session once a turn has run; for Claude
+    // Code it is the id its session log is named by.
+    if s.kind == "claude" {
+        let listed = host.list_agents().await.unwrap();
+        let mine = listed
+            .iter()
+            .find(|a| a.name.as_deref() == Some(name))
+            .unwrap();
+        let session = mine.agent_session.as_ref().expect("an agent session");
+        assert_eq!(
+            (session.agent.as_str(), session.kind.as_str()),
+            ("claude", "id")
+        );
+        let log = format!("{}.jsonl", session.value);
+        let projects = dirs::home_dir().unwrap().join(".claude/projects");
+        let found = std::fs::read_dir(&projects)
+            .unwrap()
+            .flatten()
+            .any(|d| d.path().join(&log).is_file());
+        assert!(found, "no {log} under {}", projects.display());
+    }
+
     // A question on screen: blocked, a prompt refused, keys answer it.
     if let Some((ask, keys, answered)) = s.ask {
         let before = host.prompt(name, ask).await.unwrap();

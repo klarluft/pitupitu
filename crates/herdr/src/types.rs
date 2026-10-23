@@ -148,6 +148,23 @@ pub struct AgentInfo {
     /// The agent's own window title, e.g. Claude Code's session summary.
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
+    /// The agent's own session in this pane, once herdr knows it. Left out
+    /// of the JSON when herdr reports none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<AgentSession>,
+}
+
+/// herdr's `agent_session` of an agent: which of the agent's sessions runs
+/// in the pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSession {
+    /// The agent kind herdr names it for.
+    #[serde(default)]
+    pub agent: String,
+    /// `id` when `value` is the agent's session id (for Claude Code the
+    /// name of its log file), `path` when it is the log file itself.
+    pub kind: String,
+    pub value: String,
 }
 
 impl AgentInfo {
@@ -216,5 +233,47 @@ mod agent_kind_tests {
         assert_eq!(serde_json::to_string(&kind).unwrap(), "\"codex\"");
         let back: AgentKind = serde_json::from_str("\"claude\"").unwrap();
         assert_eq!(back, AgentKind::default());
+    }
+}
+
+#[cfg(test)]
+mod agent_info_tests {
+    use super::AgentInfo;
+    use serde_json::json;
+
+    #[test]
+    fn agent_session_is_kept_from_the_agent_list() {
+        // An entry as `herdr agent list` gives it (0.9.5), trimmed.
+        let a: AgentInfo = serde_json::from_value(json!({
+            "agent": "claude", "agent_status": "idle", "cwd": "/home/me/app",
+            "pane_id": "w1:p2", "tab_id": "w1:t2", "workspace_id": "w1", "state_change_seq": 4,
+            "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                              "value": "0b5e7a1c"}
+        }))
+        .unwrap();
+        let back = serde_json::to_value(&a).unwrap();
+        assert_eq!(
+            back["agent_session"],
+            json!({"agent": "claude", "kind": "id", "value": "0b5e7a1c"})
+        );
+    }
+
+    #[test]
+    fn no_agent_session_is_left_out() {
+        for missing in [json!(null), json!("absent")] {
+            let mut v = json!({
+                "agent": "codex", "agent_status": "working", "cwd": "/home/me/app",
+                "pane_id": "w1:p3", "workspace_id": "w1"
+            });
+            if missing.is_null() {
+                v["agent_session"] = missing;
+            }
+            let a: AgentInfo = serde_json::from_value(v).unwrap();
+            assert!(a.agent_session.is_none());
+            assert!(serde_json::to_value(&a)
+                .unwrap()
+                .get("agent_session")
+                .is_none());
+        }
     }
 }

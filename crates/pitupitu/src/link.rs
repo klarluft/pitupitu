@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -474,8 +474,8 @@ impl Drop for AbortOnDrop {
 }
 
 /// What decides whether a new `agents` note is due: the set of panes and
-/// each one's status and counters.
-type Signature = Vec<(String, String, u64, Option<u64>)>;
+/// each one's status, counters and agent session.
+type Signature = Vec<(String, String, u64, Option<u64>, Option<String>)>;
 
 fn signature(agents: &[AgentInfo]) -> Signature {
     let mut sig: Signature = agents
@@ -486,6 +486,7 @@ fn signature(agents: &[AgentInfo]) -> Signature {
                 a.agent_status.as_str().to_string(),
                 a.state_change_seq,
                 a.completion_seq,
+                a.agent_session.as_ref().map(|s| s.value.clone()),
             )
         })
         .collect();
@@ -671,7 +672,7 @@ async fn poll(
 mod tests {
     use super::*;
     use crate::testhost::{agent, FakeHost};
-    use herdr::AgentStatus;
+    use herdr::{AgentSession, AgentStatus};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
     use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -727,15 +728,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_session_herdr_learns_later_makes_a_new_agents_note_due() {
+        let before = agent("notes", "w1:p1", AgentStatus::Idle, 3);
+        let mut after = before.clone();
+        after.agent_session = Some(AgentSession {
+            agent: "claude".into(),
+            kind: "id".into(),
+            value: "0b5e7a1c".into(),
+        });
+        assert_ne!(signature(&[before]), signature(&[after]));
+    }
+
     #[tokio::test]
     async fn hello_calls_notes_and_replaced() {
         let dir = tempfile::tempdir().unwrap();
         home::ensure(dir.path()).unwrap();
         let host = FakeHost::default();
-        host.agents
-            .lock()
-            .unwrap()
-            .push(agent("notes", "w1:p1", AgentStatus::Working, 5));
+        let mut notes = agent("notes", "w1:p1", AgentStatus::Working, 5);
+        notes.agent_session = Some(AgentSession {
+            agent: "claude".into(),
+            kind: "id".into(),
+            value: "0b5e7a1c".into(),
+        });
+        host.agents.lock().unwrap().push(notes);
         let (url, server) = cloud().await;
         let l = link(url, host.clone(), dir.path().to_path_buf());
         let session = tokio::spawn(async move { l.session().await });
@@ -743,7 +759,7 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 5);
+        assert_eq!(hello["protocol"], 6);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], Value::Null);
         assert!(hello.get("driver").is_none());
@@ -753,6 +769,10 @@ mod tests {
         assert_eq!(hello["available"][0]["kind"], "claude");
         assert_eq!(hello["recent"], json!([]));
         assert_eq!(hello["agents"][0]["name"], "notes");
+        assert_eq!(
+            hello["agents"][0]["agent_session"],
+            json!({"agent": "claude", "kind": "id", "value": "0b5e7a1c"})
+        );
         assert_eq!(hello["home"], json!(dir.path()));
         let home_note = next_json(&mut ws).await;
         assert_eq!(home_note["note"], "home");
