@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **5** (box 0.7; the cloud also accepts 4).
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **6** (box 0.9; the cloud also accepts 5).
 
 ## Connecting
 
@@ -38,7 +38,7 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 5, "version": "0.7.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 6, "version": "0.9.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
@@ -58,11 +58,13 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `agy`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 4 (0.6) had the same `hello` and every call but `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 5 (0.7 and 0.8) was the same, except that `AgentInfo` had no `agent_session`. Protocol 4 (0.6) had the same `hello` and every call but `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
 Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](../crates/herdr/src/types.rs) (`AgentInfo`, `Workspace`, `Created`).
+
+An `AgentInfo` (in `hello`, the `agents` note and the calls that return one) carries, since 0.9, `agent_session` when herdr knows which of the agent's own sessions runs in the pane: `{"agent": "claude", "kind": "id", "value": "0b5e7a1c-…"}`, as `herdr agent list` reports it (its `source` is not passed on). With `kind: "id"`, `value` is the agent's session id: for Claude Code the name of its session log, the `id` of the `session` note for the same session (History, below), so the cloud knows which pane each session record is. With `kind: "path"`, `value` is the agent's log file. The field is left out while herdr does not know yet (the agent has not started its session) and for agents herdr reports no session for.
 
 | call | args | ok |
 |---|---|---|
@@ -102,7 +104,7 @@ Runs the update the way the thing was installed, exactly as `pitupitu update [bo
 
 - `home`: `{"note": "home", "files": [{"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB. (0.1 also sent `PITUPITU.md`; the person's preferences live in the cloud now.)
 - `inventory`: `{"note": "inventory", "install": …, "latest": …, "herdr": …, "kinds": […], "available": […], "recent": […]}`, the fields of `hello` again, sent when any of them changed: herdr starts or stops answering, `herdr status` reads differently (looked at every minute and after an update), a newer release appears (asked every six hours), or `recent` or `available` changed (both looked at every five minutes; `available` also on every connect).
-- `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box looks once a second.
+- `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq, agent_session)` differs from the last list sent. The box looks once a second.
 
 - `session` and `git`: the box's history, only while the cloud's `settings` say `history: true` (below).
 
