@@ -21,7 +21,7 @@ reqwest.workspace = true
 serde.workspace = true
 # preserve_order: a tool's "first argument" is the first one it was given.
 serde_json = { workspace = true, features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = "0.11"
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 toml_edit.workspace = true
