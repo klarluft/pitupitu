@@ -113,9 +113,10 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 1. **Sign in**: it shows a code; approve it on any screen at pitupitu.chat. To sign in from your phone, scan the QR code setup shows with its camera (`--no-qr` leaves it out). The box gets its own key, stored in `~/.config/pitupitu/pitupitu.toml` (readable only by you). An account can have many boxes, each named (the hostname by default, `--box` to choose); setting up the same box again replaces its old key.
 2. **pitupitu's folder** (the home folder): `~/pitupitu` by default. Requests that belong to no project run there, and `skills/<name>/SKILL.md` holds routines you name by voice. What pitupitu should know about you ("client work goes on the work laptop", "I use Codex for reviews") is your preferences, kept in your account: `pitupitu prefs edit`, the page, or just tell pitupitu "remember that …". (A `PITUPITU.md` from 0.1 is no longer read; copy anything useful into `pitupitu prefs`.)
 3. **Your agents can change pitupitu's settings** (asked once, yes by default): installs a skill that teaches Claude Code and Codex how, so you can ask your own agent to do it. pitupitu keeps its copies up to date as it updates.
-4. **History** (not asked, on by default): setup says in one line that pitupitu keeps track of your projects by reading what your agents did on this machine, and where to switch it off. See [History](#history).
-5. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for the agents it finds, their sessions are set to come back after herdr restarts (`herdr integration install claude` and `codex`).
-6. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
+4. **Which agent to use** (asked only when the machine has both Claude Code and Codex and your account has no default yet; Claude Code by default): the one pitupitu starts when you don't say which. It is saved for your account, so other machines don't ask again; change it any time with `pitupitu agent claude|codex|auto`.
+5. **History** (not asked, on by default): setup says in one line that pitupitu keeps track of your projects by reading what your agents did on this machine, and where to switch it off. See [History](#history).
+6. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for the agents it finds, their sessions are set to come back after herdr restarts (`herdr integration install claude` and `codex`).
+7. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
 
 Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 
@@ -123,7 +124,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 
 | | |
 |---|---|
-| `pitupitu setup` | sign in, pitupitu's folder, herdr, starting by itself (`--home`, `--relink`, `--box`, `--no-service`, `--no-browser`, `--no-qr`, `--linger`, `--no-linger`) |
+| `pitupitu setup` | sign in, pitupitu's folder, which agent to use, herdr, starting by itself (`--home`, `--relink`, `--box`, `--no-service`, `--no-browser`, `--no-qr`, `--linger`, `--no-linger`) |
 | `pitupitu connect` | hold the link open in the foreground (what the service runs) |
 | `pitupitu status` | account, home folder, herdr (version, server, newer release), agents found, service and version as this box sees them |
 | `pitupitu settings` | your preferences, default box, agent and models, updates, voice, and every box with its note, on/off, agent and history |

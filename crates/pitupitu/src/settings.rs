@@ -35,6 +35,27 @@ pub fn agent_or_null(name: &str) -> Value {
     }
 }
 
+/// Whether `pitupitu setup` asks which agent to use by default: only a
+/// person at a terminal, only with both Claude Code and Codex installed
+/// (`installed` holds the agent CLIs found), and only while the account
+/// has no default (`default_agent` from `GET /v1/settings`).
+pub fn ask_default_agent(terminal: bool, installed: &[&str], default_agent: &Value) -> bool {
+    terminal
+        && installed.contains(&"claude")
+        && installed.contains(&"codex")
+        && default_agent.is_null()
+}
+
+/// An answer to setup's agent question: Enter is Claude Code; `1`/`2` or
+/// the name pick one; anything else is `None` (asked again).
+pub fn default_agent_answer(answer: &str) -> Option<&'static str> {
+    match answer.trim().to_lowercase().as_str() {
+        "" | "1" | "claude" | "claude code" => Some("claude"),
+        "2" | "codex" => Some("codex"),
+        _ => None,
+    }
+}
+
 fn endpoint(cfg: &Config) -> Result<(String, String)> {
     endpoint_at(cfg, "/v1/settings")
 }
@@ -287,5 +308,27 @@ mod tests {
         );
         assert_eq!(text_or_null("  \n"), Value::Null);
         assert_eq!(text_or_null(" x "), json!("x"));
+    }
+
+    #[test]
+    fn setup_asks_for_a_default_agent_only_when_there_is_a_choice() {
+        let both = ["claude", "gemini", "codex"];
+        assert!(ask_default_agent(true, &both, &Value::Null));
+        assert!(!ask_default_agent(false, &both, &Value::Null));
+        assert!(!ask_default_agent(true, &both, &json!("codex")));
+        assert!(!ask_default_agent(true, &["claude"], &Value::Null));
+        assert!(!ask_default_agent(true, &["codex", "gemini"], &Value::Null));
+        assert!(!ask_default_agent(true, &[], &Value::Null));
+    }
+
+    #[test]
+    fn default_agent_answers() {
+        assert_eq!(default_agent_answer(""), Some("claude"));
+        assert_eq!(default_agent_answer(" 1 "), Some("claude"));
+        assert_eq!(default_agent_answer("Claude Code"), Some("claude"));
+        assert_eq!(default_agent_answer("2"), Some("codex"));
+        assert_eq!(default_agent_answer("Codex"), Some("codex"));
+        assert_eq!(default_agent_answer("3"), None);
+        assert_eq!(default_agent_answer("gemini"), None);
     }
 }

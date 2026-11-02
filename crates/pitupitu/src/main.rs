@@ -1350,14 +1350,18 @@ async fn setup(
         );
     }
 
-    // 4. History: on by default, said in one line, not asked.
+    // 4. The default agent: asked only when both are here and the
+    // account has none yet.
+    setup_default_agent(path, terminal).await;
+
+    // 5. History: on by default, said in one line, not asked.
     eprintln!();
     eprintln!("  {}", settings::HISTORY_SAYS);
 
-    // 5. herdr, which runs the agents.
+    // 6. herdr, which runs the agents.
     setup_herdr().await;
 
-    // 6. The service.
+    // 7. The service.
     if !no_service {
         offer_linger(path, linger)?;
     }
@@ -1378,6 +1382,61 @@ async fn setup(
         eprintln!("  all set; now open https://pitupitu.chat/app on your phone or any browser");
     }
     Ok(())
+}
+
+/// With both Claude Code and Codex on this machine and no default agent on
+/// the account, ask the person which one pitupitu starts when they don't
+/// say, and save it as the account's default (`pitupitu agent`). Enter is
+/// Claude Code. A failure to reach the cloud is said and setup goes on.
+async fn setup_default_agent(path: &std::path::Path, terminal: bool) {
+    if !terminal {
+        return;
+    }
+    let found = inventory::available().await;
+    let installed: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
+    if !(installed.contains(&"claude") && installed.contains(&"codex")) {
+        return;
+    }
+    let cfg = match Config::load(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  could not read the settings: {e:#}");
+            return;
+        }
+    };
+    let current = match settings::get(&cfg).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  could not read your settings from pitupitu: {e:#}");
+            return;
+        }
+    };
+    if !settings::ask_default_agent(terminal, &installed, &current["default_agent"]) {
+        return;
+    }
+    eprintln!();
+    eprintln!("  This machine has both Claude Code and Codex.");
+    eprintln!("  Which one should pitupitu use when you don't say? You can still ask for the");
+    eprintln!("  other one by name any time.");
+    eprintln!("    1. Claude Code");
+    eprintln!("    2. Codex");
+    let agent = loop {
+        eprint!("  Type 1 or 2 (press Enter for Claude Code) [1]: ");
+        if let Some(a) = settings::default_agent_answer(&read_answer()) {
+            break a;
+        }
+    };
+    let name = if agent == "claude" {
+        "Claude Code"
+    } else {
+        "Codex"
+    };
+    match settings::patch(&cfg, json!({"default_agent": agent})).await {
+        Ok(_) => {
+            eprintln!("  pitupitu will use {name}; to change it later: pitupitu agent claude|codex")
+        }
+        Err(e) => eprintln!("  could not save it: {e:#}; to set it later: pitupitu agent {agent}"),
+    }
 }
 
 /// herdr is how pitupitu runs agents: installed with its own installer
