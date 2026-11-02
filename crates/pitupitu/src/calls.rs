@@ -224,6 +224,19 @@ async fn close_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallEr
     host.close_tab(&tab).await.map_err(gone)
 }
 
+/// Bring a session to the front where herdr is open on this machine:
+/// focus the workspace and the tab that hold `pane`. Nothing is opened,
+/// closed or typed. `not_found` when there is no such pane (or it went
+/// away on the way).
+async fn focus_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallError> {
+    host.focus_pane(pane).await.map_err(|e| match e.code() {
+        Some("pane_not_found" | "tab_not_found" | "workspace_not_found") => {
+            CallError::api("not_found", format!("no pane {pane} on this box"))
+        }
+        _ => CallError::from(e),
+    })
+}
+
 /// How long the box lets a call run before answering `timeout` itself:
 /// the call's own timeout plus a margin, or a generous default.
 pub fn deadline(call: &str, args: &Value) -> Duration {
@@ -274,6 +287,10 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         "close_session" => {
             let a: Pane = args(call, a)?;
             ok(close_session(host, &a.pane).await?)
+        }
+        "focus_session" => {
+            let a: Pane = args(call, a)?;
+            ok(focus_session(host, &a.pane).await?)
         }
         "start_agent" => {
             let a: StartAgent = args(call, a)?;
@@ -522,6 +539,77 @@ mod tests {
             .await
             .unwrap();
         assert!(host.list_workspaces().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn focus_session_focuses_the_workspace_and_tab_that_hold_the_pane() {
+        let host = FakeHost::default();
+        assert_eq!(
+            dispatch(&host, "focus_session", json!({"pane": "w3:p2"})).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(host.log(), ["focus_workspace w3", "focus_tab w3:t2"]);
+        let e = dispatch(&host, "focus_session", json!({"pane": "w404:p1"}))
+            .await
+            .unwrap_err();
+        assert_eq!((e.kind, e.code.as_deref()), ("api", Some("not_found")));
+        let e = dispatch(&host, "focus_session", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, "bad_call");
+        assert_eq!(host.log().len(), 2);
+    }
+
+    /// The same against a live herdr: the workspace and tab that hold the
+    /// pane come to the front, and nothing is opened or closed.
+    #[tokio::test]
+    async fn focus_session_in_a_live_herdr() {
+        let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
+            return;
+        };
+        let host = &scratch.cli;
+        host.start_server().unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        while host.list_workspaces().await.is_err() {
+            assert!(std::time::Instant::now() < end, "no server");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let first = host.create_workspace(dir.path(), "first").await.unwrap();
+        let other = host.create_workspace(dir.path(), "other").await.unwrap();
+        let second = host
+            .create_tab(&other.workspace_id, None, "two")
+            .await
+            .unwrap();
+        let focused_ws = |ws: &[herdr::Workspace]| {
+            ws.iter()
+                .find(|w| w.focused)
+                .map(|w| w.workspace_id.clone())
+        };
+        // Whether herdr has this pane in front (its tab focused).
+        let pane_focused = |pane: &herdr::PaneId| {
+            let out = std::process::Command::new("herdr")
+                .args(["--session", host.session().unwrap(), "pane", "get", &pane.0])
+                .output()
+                .unwrap();
+            let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+            v["result"]["pane"]["focused"] == true
+        };
+        let before = host.list_workspaces().await.unwrap();
+        assert_eq!(focused_ws(&before), Some(first.workspace_id.clone()));
+        assert!(!pane_focused(&second.root_pane));
+        dispatch(host, "focus_session", json!({"pane": second.root_pane}))
+            .await
+            .unwrap();
+        let after = host.list_workspaces().await.unwrap();
+        assert_eq!(after.len(), 2);
+        assert_eq!(focused_ws(&after), Some(other.workspace_id.clone()));
+        assert!(pane_focused(&second.root_pane));
+        assert!(!pane_focused(&other.root_pane));
+        let e = dispatch(host, "focus_session", json!({"pane": "w99:p99"}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code.as_deref(), Some("not_found"), "{e:?}");
     }
 
     #[tokio::test]
