@@ -410,6 +410,19 @@ impl AgentHost for HerdrCli {
             .ok_or_else(|| Error::Shape(format!("pane_info: no `pane.tab_id` in {result}")))
     }
 
+    async fn focus_pane(&self, pane: &PaneId) -> Result<()> {
+        let result = self.run_json(&["pane", "get", &pane.0]).await?;
+        let field = |name: &str| {
+            result["pane"][name]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| Error::Shape(format!("pane_info: no `pane.{name}` in {result}")))
+        };
+        let (workspace, tab) = (field("workspace_id")?, field("tab_id")?);
+        self.run_json(&["workspace", "focus", &workspace]).await?;
+        self.run_json(&["tab", "focus", &tab]).await.map(drop)
+    }
+
     async fn start_agent(
         &self,
         name: &str,

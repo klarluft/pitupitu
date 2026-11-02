@@ -104,6 +104,15 @@ impl AgentHost for FakeHost {
         }
     }
 
+    /// Focuses `wN` then `wN:tM` for `wN:pM`, as [`Self::pane_tab`] finds it.
+    async fn focus_pane(&self, pane: &PaneId) -> Result<()> {
+        let tab = self.pane_tab(pane).await?;
+        let ws = tab.0.split_once(":t").map_or("", |(w, _)| w).to_string();
+        self.note(format!("focus_workspace {ws}"));
+        self.note(format!("focus_tab {tab}"));
+        Ok(())
+    }
+
     async fn start_agent(
         &self,
         name: &str,

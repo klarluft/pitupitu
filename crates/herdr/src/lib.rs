@@ -115,6 +115,14 @@ pub trait AgentHost: Send + Sync {
     /// `pane_not_found` when there is none.
     async fn pane_tab(&self, pane: &PaneId) -> Result<TabId>;
 
+    /// Bring `pane` to the front: focus the workspace and the tab that
+    /// hold it. The only call that moves the person's view; everything
+    /// else is opened without focus. herdr counts the focused pane as
+    /// looked at, so a turn that finishes there goes to `idle` without
+    /// `done` (`completion_seq` still advances). `pane_not_found` when
+    /// there is no such pane.
+    async fn focus_pane(&self, pane: &PaneId) -> Result<()>;
+
     /// Start `kind` in an idle shell pane under a unique `name`, and get it to
     /// the point where it accepts prompts.
     async fn start_agent(
