@@ -237,6 +237,43 @@ async fn focus_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallEr
     })
 }
 
+/// How long `last_message` may take: it reads one file.
+pub const LAST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// `last_message`: the agent's whole last reply from its own log, found by
+/// the session herdr reports in its pane. `logs` is the home folder the
+/// agents keep their logs in, `None` while history is off on this box, and
+/// then nothing is looked at, not even herdr.
+pub async fn last_message(
+    host: &dyn AgentHost,
+    a: Value,
+    logs: Option<PathBuf>,
+) -> Result<Value, CallError> {
+    let a: Agent = args("last_message", a)?;
+    let Some(home) = logs else {
+        return Err(CallError::api(
+            "history_off",
+            "reading the agents' logs is switched off on this box",
+        ));
+    };
+    let info = host.agent(&a.agent).await?;
+    let found = tokio::task::spawn_blocking(move || {
+        let (path, agent) =
+            crate::history::find_log(&home, &info.agent, info.agent_session.as_ref())?;
+        crate::history::last_reply(&path, agent)
+    })
+    .await
+    .map_err(|e| CallError {
+        kind: "io",
+        code: None,
+        message: e.to_string(),
+    })?;
+    match found {
+        Ok(reply) => ok(reply),
+        Err(crate::history::NoReply::NoLog(why)) => Err(CallError::api("no_log", why)),
+    }
+}
+
 /// How long the box lets a call run before answering `timeout` itself:
 /// the call's own timeout plus a margin, or a generous default.
 pub fn deadline(call: &str, args: &Value) -> Duration {
@@ -248,6 +285,7 @@ pub fn deadline(call: &str, args: &Value) -> Duration {
         // start_agent waits for the start and again for the agent to settle.
         ("start_agent", Some(t)) => t * 2 + Duration::from_secs(30),
         ("wait", Some(t)) => t.min(MAX_WAIT) + Duration::from_secs(10),
+        ("last_message", _) => LAST_MESSAGE_TIMEOUT,
         _ => Duration::from_secs(150),
     }
 }
@@ -311,6 +349,8 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
             ok(host.agent(&a.agent).await?)
         }
         "list_agents" => ok(host.list_agents().await?),
+        // The link runs it with the history setting; here it is off.
+        "last_message" => last_message(host, a, None).await,
         "wait" => {
             let a: Wait = args(call, a)?;
             let timeout = Duration::from_millis(a.timeout_ms).min(MAX_WAIT);
@@ -610,6 +650,82 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(e.code.as_deref(), Some("not_found"), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn last_message_reads_the_log_only_with_history_on() {
+        let home = tempfile::tempdir().unwrap();
+        let logs = home.path().join(".claude/projects/-work");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("s-1.jsonl"),
+            [
+                json!({"type": "user", "isSidechain": false, "timestamp": "2026-10-08T12:00:00Z",
+                       "message": {"role": "user", "content": "Name the boat"}}),
+                json!({"type": "assistant", "isSidechain": false, "timestamp": "2026-10-08T12:00:03Z",
+                       "message": {"role": "assistant", "content": [{"type": "text", "text": "Call it Puffin."}]}}),
+            ]
+            .map(|v| v.to_string())
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        let host = FakeHost::default();
+        let with = |name: &str, pane: &str, kind: &str, id: Option<&str>| {
+            let mut a = crate::testhost::agent(name, pane, herdr::AgentStatus::Done, 3);
+            a.agent = kind.into();
+            a.agent_session = id.map(|id| herdr::AgentSession {
+                agent: kind.into(),
+                kind: "id".into(),
+                value: id.into(),
+            });
+            a
+        };
+        host.agents.lock().unwrap().extend([
+            with("boat", "w1:p1", "claude", Some("s-1")),
+            with("lost", "w1:p2", "claude", Some("s-2")),
+            with("bare", "w1:p3", "claude", None),
+            with("gem", "w1:p4", "gemini", Some("g-1")),
+        ]);
+        let on = Some(home.path().to_path_buf());
+        let out = last_message(&host, json!({"agent": "boat"}), on.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            json!({"text": "Call it Puffin.", "at": "2026-10-08T12:00:03Z", "turn": 1, "cut": false})
+        );
+        // By pane, as for every call that takes `agent`.
+        let out = last_message(&host, json!({"agent": "w1:p1"}), on.clone()).await;
+        assert!(out.is_ok(), "{out:?}");
+        for name in ["lost", "bare", "gem"] {
+            let e = last_message(&host, json!({"agent": name}), on.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.kind, e.code.as_deref()),
+                ("api", Some("no_log")),
+                "{name}"
+            );
+        }
+        let e = last_message(&host, json!({"agent": "missing"}), on.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(e.code.as_deref(), Some("agent_not_found"));
+        let e = last_message(&host, json!({}), on).await.unwrap_err();
+        assert_eq!(e.kind, "bad_call");
+
+        // History off: refused before anything is looked at.
+        let before = host.log().len();
+        let e = last_message(&host, json!({"agent": "boat"}), None)
+            .await
+            .unwrap_err();
+        assert_eq!((e.kind, e.code.as_deref()), ("api", Some("history_off")));
+        let e = dispatch(&host, "last_message", json!({"agent": "boat"}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code.as_deref(), Some("history_off"));
+        assert_eq!(host.log().len(), before);
     }
 
     #[tokio::test]

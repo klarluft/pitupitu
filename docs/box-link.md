@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **6** (the cloud also accepts 5).
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **7** (the cloud also accepts 6).
 
 ## Connecting
 
@@ -38,7 +38,7 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 6, "version": "0.9.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 7, "version": "0.9.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
@@ -58,7 +58,7 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `agy`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 5 (0.7 and 0.8) had the same `hello` and every call but `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
@@ -73,6 +73,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `close_tab` | `tab` | `null` |
 | `close_session` | `pane` | `null`; since 0.7, below |
 | `focus_session` | `pane` | `null`; protocol 6, below |
+| `last_message` | `agent` | `{"text", "at", "turn", "cut"}`; protocol 7, below |
 | `start_agent` | `name`, `kind`, `pane`, `accept_trust_prompt`, `timeout_ms?`, `agent_args?` | `AgentInfo` |
 | `prompt` | `agent`, `text` | `AgentInfo` (the state before the agent reacted) |
 | `agent` | `agent` | `AgentInfo` |
@@ -100,6 +101,22 @@ Brings a session to the front in herdr on this machine, when the person asks for
 - `api` with code `not_found`: herdr has no pane with that id (or its tab or workspace went away on the way).
 - Any other herdr error keeps herdr's own code, as for every call.
 
+### `last_message`
+
+The agent's whole last reply, read from its own session log, for when the end of the screen is not enough (a long report, an answer that scrolled away). Only while history is on for this box (below): the same switch, the same files, the same redaction.
+
+```json
+{"text": "# Findings\n\n…\n\nIn short: …", "at": "2026-10-20T09:40:00.000Z", "turn": 4, "cut": false}
+```
+
+- Which log: herdr's `agent get` for `agent` (a name or a pane, as for the other calls) carries `agent_session`, the agent's own session as herdr's integration reports it. By `id`: Claude Code's `~/.claude/projects/*/<id>.jsonl`, Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`. By `path`: only when the path is one of those files. The box does not guess: no session reported, no match. `agent_session` itself is not sent to the cloud, in this reply or in `AgentInfo`.
+- `text`: the `text` blocks of the agent's answer to the person's last prompt (what counts as a prompt is what a `session` note counts as a `you` turn), in order, each trimmed, joined by a blank line. A reply interleaved with tool calls is several log entries; all of their text is in it. Never tool calls or their results, thinking, Claude Code's own additions, notifications or subagents' transcripts. While the agent has written nothing yet for the newest prompt, the reply before it is given. Redacted as `session` notes are.
+- `cut`: the text was longer than 64 KB. It is then its first 16 KB, a line `[… N characters left out …]`, and its end, 64 KB in all; the end is kept because that is where a reply concludes.
+- `at`: when the reply's last text block was written, as the log has it. `turn`: how many prompts the person had typed in that session by then (the first is 1), so the reply answers prompt `turn`.
+- `api` with code `history_off`: history is off on this box, or the cloud has not said yet on this link. Nothing is read, herdr is not asked.
+- `api` with code `no_log`: no log found: an agent whose logs the box does not read (anything but Claude Code and Codex), herdr reports no session for the pane (its integration for that agent is missing; `pitupitu setup` installs it), no such file, or nothing replied yet. The message says which.
+- `agent_not_found` and other herdr codes as for every agent call. The box gives the call 8 seconds; the cloud should wait about as long.
+
 ### `update`
 
 Runs the update the way the thing was installed, exactly as `pitupitu update [box|herdr] --yes` does at the keyboard, and only because the cloud asked on the person's word; the box never starts one itself.
@@ -114,11 +131,11 @@ Runs the update the way the thing was installed, exactly as `pitupitu update [bo
 - `inventory`: `{"note": "inventory", "install": …, "latest": …, "herdr": …, "kinds": […], "available": […], "recent": […]}`, the fields of `hello` again, sent when any of them changed: herdr starts or stops answering, `herdr status` reads differently (looked at every minute and after an update), a newer release appears (asked every six hours), or `recent` or `available` changed (both looked at every five minutes; `available` also on every connect).
 - `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box looks once a second.
 
-- `session` and `git`: the box's history, only while the cloud's `settings` say `history: true` (below).
+- `session` and `git`: the box's history, only while the cloud's `settings` say `history: true` (below). The `last_message` call answers only then too.
 
 ## Notes from the cloud
 
-- `settings`: `{"note": "settings", "history": true | false, "resend": true}` (`resend` optional), right after `hello` and whenever the person changes it. `history: true` means: read the agents' own session logs on this box and send `session` and `git` notes. `false` means: send nothing of the kind and remove the reader's state. The default is the cloud's, and it is on: a box that never switched history off is sent `true`. Until the note comes, the box reads nothing. `resend: true` (with `history: true`, after the person asked the cloud to rebuild what it knows) sends everything again from the start. The box keeps nothing about the setting itself; the cloud says it again on every link. Other fields are ignored, so a note with protocol 2's `driver` and no `history` is no setting at all.
+- `settings`: `{"note": "settings", "history": true | false, "resend": true}` (`resend` optional), right after `hello` and whenever the person changes it. `history: true` means: read the agents' own session logs on this box, send `session` and `git` notes, and answer `last_message`. `false` means: send nothing of the kind, refuse `last_message` (`history_off`) and remove the reader's state. The default is the cloud's, and it is on: a box that never switched history off is sent `true`. Until the note comes, the box reads nothing. `resend: true` (with `history: true`, after the person asked the cloud to rebuild what it knows) sends everything again from the start. The box keeps nothing about the setting itself; the cloud says it again on every link. Other fields are ignored, so a note with protocol 2's `driver` and no `history` is no setting at all.
 
 No other note from the cloud is acted on.
 

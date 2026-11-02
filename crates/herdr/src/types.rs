@@ -148,6 +148,23 @@ pub struct AgentInfo {
     /// The agent's own window title, e.g. Claude Code's session summary.
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
+    /// Which of the agent's own sessions runs in the pane, as herdr's
+    /// integration reports it. Read on the box to find the agent's log
+    /// (`last_message`); never sent on.
+    #[serde(default, skip_serializing)]
+    pub agent_session: Option<AgentSession>,
+}
+
+/// herdr's `agent_session`: the agent's own session, by id (Claude Code's
+/// and Codex's session id) or by the path of its log.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AgentSession {
+    /// The agent the session belongs to (`claude`, `codex`, …).
+    #[serde(default)]
+    pub agent: String,
+    /// `id` or `path`.
+    pub kind: String,
+    pub value: String,
 }
 
 impl AgentInfo {
