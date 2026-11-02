@@ -136,11 +136,7 @@ pub fn print(settings: &Value, as_json: bool) {
             format!("; models: {}", models.join(", "))
         }
     );
-    println!(
-        "voice: {}; patience: {} ms",
-        settings["voice"].as_str().unwrap_or("default"),
-        settings["patience_ms"]
-    );
+    println!("voice: {}", settings["voice"].as_str().unwrap_or("default"));
     println!("boxes:");
     for b in settings["boxes"].as_array().into_iter().flatten() {
         let name = b["name"].as_str().unwrap_or("?");
