@@ -1319,6 +1319,9 @@ async fn setup(
 
     // 3. The skill: offered once to a person at a terminal; once there,
     // written for the agents on this machine and kept up to date.
+    // The agent CLIs on PATH, for what setup says and the agent question.
+    let found = inventory::available().await;
+    let installed: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
     let user_home = config::home_dir();
     let offered = skill::any_installed(&user_home);
     let terminal = std::io::stdin().is_terminal();
@@ -1332,10 +1335,19 @@ async fn setup(
         };
     if wanted {
         match skill::sync(&user_home, skill::Mode::Install) {
-            Ok(done) if done.is_empty() && !offered => eprintln!(
-                "  no Claude Code or Codex on this machine yet; once there is, run: \
-                 pitupitu skill install"
-            ),
+            Ok(done) if done.is_empty() && !offered => {
+                if has_claude_or_codex(&installed) {
+                    eprintln!(
+                        "  Claude Code and Codex have not been used on this machine yet; once \
+                         one has, run: pitupitu skill install"
+                    )
+                } else {
+                    eprintln!(
+                        "  no Claude Code or Codex on this machine yet; once there is, run: \
+                         pitupitu skill install"
+                    )
+                }
+            }
             Ok(done) => {
                 for d in done {
                     eprintln!("  {}", d.line());
@@ -1352,7 +1364,7 @@ async fn setup(
 
     // 4. The default agent: asked only when both are here and the
     // account has none yet.
-    setup_default_agent(path, terminal).await;
+    setup_default_agent(path, terminal, &installed).await;
 
     // 5. History: on by default, said in one line, not asked.
     eprintln!();
@@ -1388,12 +1400,10 @@ async fn setup(
 /// the account, ask the person which one pitupitu starts when they don't
 /// say, and save it as the account's default (`pitupitu agent`). Enter is
 /// Claude Code. A failure to reach the cloud is said and setup goes on.
-async fn setup_default_agent(path: &std::path::Path, terminal: bool) {
+async fn setup_default_agent(path: &std::path::Path, terminal: bool, installed: &[&str]) {
     if !terminal {
         return;
     }
-    let found = inventory::available().await;
-    let installed: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
     if !(installed.contains(&"claude") && installed.contains(&"codex")) {
         return;
     }
@@ -1411,7 +1421,7 @@ async fn setup_default_agent(path: &std::path::Path, terminal: bool) {
             return;
         }
     };
-    if !settings::ask_default_agent(terminal, &installed, &current["default_agent"]) {
+    if !settings::ask_default_agent(terminal, installed, &current["default_agent"]) {
         return;
     }
     eprintln!();
@@ -1425,6 +1435,7 @@ async fn setup_default_agent(path: &std::path::Path, terminal: bool) {
         if let Some(a) = settings::default_agent_answer(&read_answer()) {
             break a;
         }
+        eprintln!("  Type 1 or 2.");
     };
     let name = if agent == "claude" {
         "Claude Code"
@@ -1437,6 +1448,11 @@ async fn setup_default_agent(path: &std::path::Path, terminal: bool) {
         }
         Err(e) => eprintln!("  could not save it: {e:#}; to set it later: pitupitu agent {agent}"),
     }
+}
+
+/// Whether Claude Code or Codex is on PATH (`installed`: the agent CLIs found).
+fn has_claude_or_codex(installed: &[&str]) -> bool {
+    installed.iter().any(|k| *k == "claude" || *k == "codex")
 }
 
 /// herdr is how pitupitu runs agents: installed with its own installer
