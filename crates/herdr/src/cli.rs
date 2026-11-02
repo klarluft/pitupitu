@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -338,6 +338,31 @@ fn created_from(result: &Value) -> Result<Created> {
     })
 }
 
+/// The folder a new workspace or tab opens in, `~` expanded, or
+/// `no_such_directory` when it is not a folder on this machine. herdr
+/// itself would open the home folder instead, and the agent would work
+/// in the wrong place.
+pub(crate) fn existing_dir(cwd: &Path) -> Result<PathBuf> {
+    let dir = match cwd.strip_prefix("~") {
+        Ok(rest) => match std::env::var_os("HOME") {
+            Some(home) => Path::new(&home).join(rest),
+            None => cwd.to_path_buf(),
+        },
+        Err(_) => cwd.to_path_buf(),
+    };
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(Error::Api {
+            code: "no_such_directory".into(),
+            message: format!(
+                "that folder does not exist on this machine: {}",
+                cwd.display()
+            ),
+        })
+    }
+}
+
 fn ms(d: Duration) -> String {
     d.as_millis().to_string()
 }
@@ -354,6 +379,7 @@ impl AgentHost for HerdrCli {
     }
 
     async fn create_workspace(&self, cwd: &Path, label: &str) -> Result<Created> {
+        let cwd = existing_dir(cwd)?;
         let cwd = cwd.to_string_lossy();
         let result = self
             .run_json(&[
@@ -375,7 +401,10 @@ impl AgentHost for HerdrCli {
         cwd: Option<&Path>,
         label: &str,
     ) -> Result<Created> {
-        let cwd = cwd.map(|c| c.to_string_lossy().into_owned());
+        let cwd = cwd
+            .map(existing_dir)
+            .transpose()?
+            .map(|c| c.to_string_lossy().into_owned());
         let mut args = vec![
             "tab",
             "create",
@@ -623,6 +652,40 @@ mod tests {
         let text = cli.read("x", 80).await.unwrap();
         assert!(text.contains("2. Option two"), "{text}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A missing folder is refused before herdr runs (it would open the
+    /// home folder instead); an existing one reaches herdr.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_missing_folder_is_refused_before_herdr_runs() {
+        let (cli, dir) = fake_herdr("exit 0");
+        let missing = dir.join("no-such-folder");
+        let e = cli.create_workspace(&missing, "x").await.unwrap_err();
+        assert_eq!(e.code(), Some("no_such_directory"));
+        assert!(
+            e.to_string().contains("does not exist on this machine"),
+            "{e}"
+        );
+        let w = WorkspaceId("w1".into());
+        let e = cli.create_tab(&w, Some(&missing), "x").await.unwrap_err();
+        assert_eq!(e.code(), Some("no_such_directory"));
+        // The folder exists: herdr is asked (and the stand-in answers nothing).
+        let e = cli.create_workspace(&dir, "x").await.unwrap_err();
+        assert_ne!(e.code(), Some("no_such_directory"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_under_home_is_expanded() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        assert_eq!(existing_dir(Path::new("~")).unwrap(), Path::new(&home));
+        assert_eq!(
+            existing_dir(Path::new("/")).unwrap(),
+            Path::new("/").to_path_buf()
+        );
     }
 
     #[cfg(unix)]

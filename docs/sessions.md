@@ -90,7 +90,7 @@ spells them:
 | `agent_name_taken` | `start_agent` | the name is in use |
 | `pane_not_found`, `pane_busy` | `start_agent` | no such pane, or it already runs an agent |
 | `workspace_not_found`, `tab_not_found` | `create_tab`, `close_*` | no such workspace or tab |
-| `no_such_directory` | `create_workspace`, `create_tab` | the folder is not on this box |
+| `no_such_directory` | `create_workspace`, `create_tab` | the folder is not on this box; the box refuses it before herdr runs, which would open the home folder instead |
 | `bad_key` | `send_keys` | not a key name |
 | `update_failed`, `update_unavailable`, `nothing_to_update` | `update` | the box's own (`box-link.md`, "`update`") |
 
