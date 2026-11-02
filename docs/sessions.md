@@ -93,6 +93,7 @@ spells them:
 | `no_such_directory` | `create_workspace`, `create_tab` | the folder is not on this box; the box refuses it before herdr runs, which would open the home folder instead |
 | `bad_key` | `send_keys` | not a key name |
 | `update_failed`, `update_unavailable`, `nothing_to_update` | `update` | the box's own (`box-link.md`, "`update`") |
+| `history_off`, `no_log` | `last_message` | the box's own: history is off on this box, or the agent's log was not found (`box-link.md`, "`last_message`") |
 
 Other herdr codes pass through unchanged. The cloud handles a code it does
 not know by its `kind`, never by its message text.

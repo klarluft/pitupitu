@@ -30,6 +30,7 @@ pub fn agent(name: &str, pane: &str, status: AgentStatus, seq: u64) -> AgentInfo
         launch_pending: false,
         interactive_ready: true,
         terminal_title_stripped: None,
+        agent_session: None,
     }
 }
 
@@ -146,7 +147,15 @@ impl AgentHost for FakeHost {
                 message: "no such agent".into(),
             });
         }
-        Ok(agent(name, "w1:p1", AgentStatus::Idle, 1))
+        // An agent a test put in the list, by name or pane, as it is there.
+        let listed = self
+            .agents
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.name.as_deref() == Some(name) || a.pane_id.0 == name)
+            .cloned();
+        Ok(listed.unwrap_or_else(|| agent(name, "w1:p1", AgentStatus::Idle, 1)))
     }
 
     async fn list_agents(&self) -> Result<Vec<AgentInfo>> {

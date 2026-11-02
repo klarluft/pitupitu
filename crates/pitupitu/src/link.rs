@@ -14,6 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use herdr::{AgentHost, AgentInfo, Status};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
@@ -23,7 +24,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -234,6 +235,8 @@ impl Link {
         // The session reader, on a thread of its own: it waits for the
         // cloud's `settings` and ends with this link.
         let (settings, settings_rx) = std::sync::mpsc::channel::<Setting>();
+        // The same setting for `last_message`: off until the cloud says on.
+        let history_on = Arc::new(AtomicBool::new(false));
         if let Some(home) = self.history.clone() {
             let (state_dir, tx) = (self.state_dir.clone(), tx.clone());
             std::thread::spawn(move || {
@@ -271,7 +274,7 @@ impl Link {
                         Some(m) => m.context("reading from the cloud")?,
                     };
                     match msg {
-                        Message::Text(t) => self.incoming(t.as_str(), &tx, &refresh, &settings),
+                        Message::Text(t) => self.incoming(t.as_str(), &tx, &refresh, &settings, &history_on),
                         // Pong answers are queued by the library and flushed
                         // on the next read or write.
                         Message::Ping(_) => last_ping = Instant::now(),
@@ -321,6 +324,7 @@ impl Link {
         tx: &mpsc::Sender<Out>,
         refresh: &Arc<Notify>,
         settings: &std::sync::mpsc::Sender<Setting>,
+        history_on: &Arc<AtomicBool>,
     ) {
         let Ok(value) = serde_json::from_str::<Value>(frame) else {
             warn!("unreadable frame from the cloud");
@@ -333,6 +337,7 @@ impl Link {
             match (note, Setting::from_note(&value)) {
                 ("settings", Some(s)) => {
                     debug!(history = s.history, resend = s.resend, "settings");
+                    history_on.store(s.history, Ordering::SeqCst);
                     let _ = settings.send(s);
                 }
                 _ => debug!(note, "note from the cloud"),
@@ -356,12 +361,25 @@ impl Link {
             tokio::spawn(async move { update_call(id, args, keeper, tx, refresh).await });
             return;
         }
+        // `last_message` reads the agents' logs: only while history is on,
+        // and never without a home folder to read them in.
+        let logs = (call == "last_message").then(|| {
+            self.history
+                .clone()
+                .filter(|_| history_on.load(Ordering::SeqCst))
+        });
         let host = self.host.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
             let started = Instant::now();
             let deadline = calls::deadline(&call, &args);
-            let result = tokio::time::timeout(deadline, calls::dispatch(&*host, &call, args))
+            let run = async {
+                match logs {
+                    Some(logs) => calls::last_message(&*host, args, logs).await,
+                    None => calls::dispatch(&*host, &call, args).await,
+                }
+            };
+            let result = tokio::time::timeout(deadline, run)
                 .await
                 .unwrap_or_else(|_| {
                     Err(CallError::timeout(format!("{call} took over {deadline:?}")))
@@ -743,7 +761,7 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 6);
+        assert_eq!(hello["protocol"], 7);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], Value::Null);
         assert!(hello.get("driver").is_none());
@@ -836,6 +854,79 @@ mod tests {
         assert_eq!(note["note"], "session");
         assert_eq!(note["session"]["id"], "s-9");
         assert_eq!(note["session"]["turns"][0]["text"], "Tidy the docs");
+        session.abort();
+    }
+
+    /// Protocol 7: `last_message` reads the agent's log only while the
+    /// cloud's `settings` say `history: true`; before the note comes and
+    /// after it says false, it is refused.
+    #[tokio::test]
+    async fn last_message_follows_the_settings_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join(".claude/projects/-work");
+        std::fs::create_dir_all(&logs).unwrap();
+        let line = |ty: &str, content: Value, at: &str| {
+            json!({"type": ty, "isSidechain": false, "cwd": "/work", "sessionId": "s-7",
+                   "timestamp": at, "message": {"role": ty, "content": content}})
+            .to_string()
+        };
+        std::fs::write(
+            logs.join("s-7.jsonl"),
+            [
+                line("user", json!("Plan the picnic"), "2026-10-20T10:00:00Z"),
+                line(
+                    "assistant",
+                    json!([{"type": "text", "text": "Bring lemonade."}]),
+                    "2026-10-20T10:00:05Z",
+                ),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        let host = FakeHost::default();
+        let mut a = agent("picnic", "w1:p4", AgentStatus::Idle, 1);
+        a.agent_session = Some(herdr::AgentSession {
+            agent: "claude".into(),
+            kind: "id".into(),
+            value: "s-7".into(),
+        });
+        host.agents.lock().unwrap().push(a);
+        let (url, server) = cloud().await;
+        let mut l = link(url, host, dir.path().to_path_buf());
+        l.history = Some(dir.path().to_path_buf());
+        let session = tokio::spawn(async move { l.session().await });
+        let mut ws = server.await.unwrap();
+        next_json(&mut ws).await; // hello
+        next_json(&mut ws).await; // home
+        async fn reply(ws: &mut Server, id: u64) -> Value {
+            let call = json!({"id": id, "call": "last_message", "args": {"agent": "picnic"}});
+            ws.send(text(&call)).await.unwrap();
+            loop {
+                let v = tokio::time::timeout(Duration::from_secs(10), next_json(ws))
+                    .await
+                    .expect("a reply");
+                if v["id"] == id {
+                    return v;
+                }
+            }
+        }
+        let r = reply(&mut ws, 1).await;
+        assert_eq!(r["err"]["code"], "history_off", "{r}");
+        ws.send(text(&json!({"note": "settings", "history": true})))
+            .await
+            .unwrap();
+        let r = reply(&mut ws, 2).await;
+        assert_eq!(
+            r["ok"],
+            json!({"text": "Bring lemonade.", "at": "2026-10-20T10:00:05Z", "turn": 1, "cut": false}),
+            "{r}"
+        );
+        ws.send(text(&json!({"note": "settings", "history": false})))
+            .await
+            .unwrap();
+        let r = reply(&mut ws, 3).await;
+        assert_eq!(r["err"]["code"], "history_off", "{r}");
         session.abort();
     }
 

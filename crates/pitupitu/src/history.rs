@@ -19,6 +19,10 @@
 //! Everything sent is cut short and anything that looks like a secret
 //! becomes `[redacted]` first.
 //!
+//! The same reading gives the `last_message` call (protocol 7) the
+//! agent's whole last reply, on the cloud's asking and only while history
+//! is on: its text only, redacted, at most 64 KB.
+//!
 //! The reader remembers, in `history.json` under the state directory, the
 //! size and time of each log as last sent and each repository's HEAD as
 //! last sent, so a restart does not send everything again. That file is
@@ -429,6 +433,8 @@ struct Parsed {
     first_you: Option<usize>,
     total: usize,
     bytes: usize,
+    /// The agent's last reply, uncut, when reading for `last_message`.
+    last: Option<Last>,
 }
 
 fn turn_size(t: &Turn) -> usize {
@@ -477,6 +483,7 @@ impl Parsed {
             first_you: None,
             total: 0,
             bytes: 0,
+            last: None,
         }
     }
 
@@ -526,11 +533,17 @@ impl Parsed {
 
     fn you(&mut self, at: &str, text: Option<String>) {
         if let Some(t) = text.as_deref().and_then(|t| turn_text(t, YOU_MAX)) {
+            if let Some(l) = self.last.as_mut() {
+                l.you();
+            }
             self.push(at, Kind::You { text: t });
         }
     }
 
     fn said(&mut self, at: &str, text: &str) {
+        if let Some(l) = self.last.as_mut() {
+            l.said(at, text);
+        }
         if let Some(t) = turn_text(text, AGENT_MAX) {
             self.push(at, Kind::Agent { text: t });
         }
@@ -1221,6 +1234,217 @@ pub fn run(
     }
 }
 
+// ---------------------------------------------------------------------
+// The last reply (`last_message`).
+
+/// The last reply's text, at most (64 KB).
+pub const REPLY_MAX: usize = 64 * 1024;
+/// Of a cut reply, the first this many bytes are kept; the rest of
+/// [`REPLY_MAX`] goes to its end, where the conclusion is.
+const REPLY_HEAD: usize = 16 * 1024;
+
+/// The agent's last reply, as `last_message` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Reply {
+    /// The text blocks of the reply, in order, joined by blank lines.
+    pub text: String,
+    /// When its last text block was written (RFC 3339, as the log has it).
+    pub at: String,
+    /// How many times the person had typed by then: the reply answers
+    /// that turn.
+    pub turn: usize,
+    /// The text was longer than 64 KB and its middle was left out.
+    pub cut: bool,
+}
+
+/// Why there is no reply to give.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoReply {
+    /// No log of this session was found: an agent whose logs the box does
+    /// not read, no session reported by herdr, or no such file.
+    NoLog(String),
+}
+
+/// One reply as it is read: everything the agent said since the person's
+/// last prompt.
+#[derive(Debug, Default)]
+struct Last {
+    turn: usize,
+    parts: Vec<String>,
+    bytes: usize,
+    at: String,
+    cut: bool,
+    /// The previous turn's reply, kept while the current one has no text
+    /// yet (the agent just started on a new prompt).
+    prev: Option<(Vec<String>, String, usize, bool)>,
+}
+
+impl Last {
+    fn you(&mut self) {
+        if !self.parts.is_empty() {
+            let parts = std::mem::take(&mut self.parts);
+            self.prev = Some((parts, std::mem::take(&mut self.at), self.turn, self.cut));
+        }
+        self.turn += 1;
+        self.bytes = 0;
+        self.cut = false;
+    }
+
+    fn said(&mut self, at: &str, text: &str) {
+        let t = text.trim();
+        if t.is_empty() {
+            return;
+        }
+        self.bytes += t.len();
+        self.parts.push(t.to_string());
+        self.at = at.to_string();
+        // A reply far past the cap keeps its first and last parts only,
+        // so memory stays small however long the turn.
+        if self.bytes > 8 * REPLY_MAX && self.parts.len() > 2 {
+            while self.bytes > 4 * REPLY_MAX && self.parts.len() > 2 {
+                let gone = self.parts.remove(1);
+                self.bytes -= gone.len();
+                self.cut = true;
+            }
+        }
+    }
+
+    fn reply(self) -> Option<Reply> {
+        let (parts, at, turn, cut) = if self.parts.is_empty() {
+            self.prev?
+        } else {
+            (self.parts, self.at, self.turn, self.cut)
+        };
+        let text = redact(&parts.join("\n\n"));
+        let (text, shortened) = head_and_tail(&text, REPLY_MAX);
+        Some(Reply {
+            text,
+            at,
+            turn,
+            cut: cut || shortened,
+        })
+    }
+}
+
+/// `s` in at most `max` bytes: as it is when it fits, else its first
+/// 16 KB and its end, with a line saying how much was left out between.
+fn head_and_tail(s: &str, max: usize) -> (String, bool) {
+    if s.len() <= max {
+        return (s.to_string(), false);
+    }
+    let floor = |mut i: usize| {
+        while !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    };
+    let ceil = |mut i: usize| {
+        while !s.is_char_boundary(i) {
+            i += 1;
+        }
+        i
+    };
+    // The marker is at most this long.
+    const MARK: usize = 48;
+    let head = floor(REPLY_HEAD.min(max / 4));
+    let tail = ceil(s.len() - (max - head - MARK));
+    let gone = s[head..tail].chars().count();
+    let text = format!(
+        "{}\n\n[… {gone} characters left out …]\n\n{}",
+        &s[..head],
+        &s[tail..]
+    );
+    (text, true)
+}
+
+/// A session id that can be part of a file name: letters, digits, `-`
+/// and `_`, as Claude Code's and Codex's ids are.
+fn safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The log of the session herdr reports in a pane, under `home`: Claude
+/// Code's `~/.claude/projects/*/<id>.jsonl`, Codex's
+/// `~/.codex/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`. A session given
+/// by path counts only when it is one of those files. Nothing else is
+/// looked at.
+pub fn find_log(
+    home: &Path,
+    agent: &str,
+    session: Option<&herdr::AgentSession>,
+) -> Result<(PathBuf, &'static str), NoReply> {
+    let agent = match agent {
+        "claude" => "claude",
+        "codex" => "codex",
+        other => {
+            return Err(NoReply::NoLog(format!(
+                "the box does not read {} logs",
+                if other.is_empty() {
+                    "this agent's"
+                } else {
+                    other
+                }
+            )))
+        }
+    };
+    let Some(session) = session else {
+        return Err(NoReply::NoLog(
+            "herdr reports no session for this pane (its integration for the agent may be missing: `pitupitu setup`)".into(),
+        ));
+    };
+    let files = || {
+        inventory::session_files(home)
+            .into_iter()
+            .filter(|(_, _, a)| *a == agent)
+            .map(|(m, p, _)| (m, p))
+    };
+    let found = match session.kind.as_str() {
+        "id" if safe_id(&session.value) => {
+            let v = &session.value;
+            files()
+                .filter(|(_, p)| {
+                    let stem = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy())
+                        .unwrap_or_default();
+                    match agent {
+                        "claude" => stem == v.as_str(),
+                        _ => stem.ends_with(&format!("-{v}")),
+                    }
+                })
+                .max_by_key(|(m, _)| *m)
+                .map(|(_, p)| p)
+        }
+        "path" => {
+            let want = Path::new(&session.value);
+            files().map(|(_, p)| p).find(|p| p == want)
+        }
+        _ => None,
+    };
+    found
+        .map(|p| (p, agent))
+        .ok_or_else(|| NoReply::NoLog("no log of this session on the box".into()))
+}
+
+/// The agent's last reply in the log at `path`: the text blocks of its
+/// answer to the person's last prompt (or the one before, while it has
+/// written nothing for the last), never tool calls, tool results,
+/// thinking or subagents; redacted as `session` notes are; at most 64 KB.
+pub fn last_reply(path: &Path, agent: &'static str) -> Result<Reply, NoReply> {
+    let mut p = Parsed::new(agent);
+    p.last = Some(Last::default());
+    p.read(path)
+        .map_err(|e| NoReply::NoLog(format!("reading the log: {}", e.kind())))?;
+    p.last
+        .take()
+        .and_then(Last::reply)
+        .ok_or_else(|| NoReply::NoLog("the agent has written no reply yet".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1253,6 +1477,207 @@ mod tests {
             p.line(l);
         }
         p
+    }
+
+    /// A Claude Code session of two prompts; the second reply comes in
+    /// pieces between tool calls. Fictional throughout.
+    fn reply_log() -> String {
+        let line = |ty: &str, extra: Value, content: Value, at: &str| {
+            let mut v = json!({"type": ty, "isSidechain": false, "cwd": "/work/garden",
+                "sessionId": "c-42", "timestamp": at, "message": {"role": ty, "content": content}});
+            if let (Value::Object(v), Value::Object(e)) = (&mut v, extra) {
+                v.extend(e);
+            }
+            v.to_string()
+        };
+        let none = json!({});
+        [
+            line("user", json!({"origin": {"kind": "human"}}), json!("Which tomatoes grow best on a balcony?"), "2026-10-05T08:00:00Z"),
+            line("assistant", none.clone(), json!([{"type": "text", "text": "Cherry tomatoes."}]), "2026-10-05T08:00:04Z"),
+            line("user", none.clone(), json!("Write me a full report on balcony herbs"), "2026-10-05T09:00:00Z"),
+            line("assistant", none.clone(), json!([{"type": "thinking", "thinking": "SECRET MUSING"}]), "2026-10-05T09:00:01Z"),
+            line("assistant", none.clone(), json!([{"type": "text", "text": "# Balcony herbs\n\nBasil wants sun."}]), "2026-10-05T09:00:02Z"),
+            line("assistant", none.clone(), json!([{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/work/garden/notes.md"}}]), "2026-10-05T09:00:03Z"),
+            line("user", none.clone(), json!([{"type": "tool_result", "tool_use_id": "t1", "content": "TOOL RESULT TEXT"}]), "2026-10-05T09:00:04Z"),
+            line("user", json!({"isMeta": true}), json!([{"type": "text", "text": "META ADDITION"}]), "2026-10-05T09:00:05Z"),
+            line("user", json!({"origin": {"kind": "task-notification"}}), json!("<task-notification>NOTIFIED</task-notification>"), "2026-10-05T09:00:05Z"),
+            line("user", json!({"isSidechain": true}), json!("SUBAGENT PROMPT"), "2026-10-05T09:00:06Z"),
+            line("assistant", json!({"isSidechain": true}), json!([{"type": "text", "text": "SUBAGENT REPLY"}]), "2026-10-05T09:00:07Z"),
+            line("assistant", none.clone(), json!([{"type": "text", "text": "Mint spreads; use token=hunter22 nowhere."}, {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls"}}]), "2026-10-05T09:00:08Z"),
+            line("assistant", none, json!([{"type": "text", "text": "In short: basil, mint, chives."}]), "2026-10-05T09:00:09Z"),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn write_log(dir: &Path, rel: &str, text: &str) -> PathBuf {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_last_reply_is_the_text_since_the_last_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = write_log(dir.path(), "c.jsonl", &reply_log());
+        let r = last_reply(&log, "claude").unwrap();
+        assert_eq!(
+            r.text,
+            "# Balcony herbs\n\nBasil wants sun.\n\nMint spreads; use token=[redacted] nowhere.\n\nIn short: basil, mint, chives."
+        );
+        assert_eq!(r.at, "2026-10-05T09:00:09Z");
+        assert_eq!((r.turn, r.cut), (2, false));
+        for never in [
+            "SECRET",
+            "TOOL RESULT",
+            "META",
+            "NOTIFIED",
+            "SUBAGENT",
+            "hunter22",
+            "Cherry",
+            "notes.md",
+        ] {
+            assert!(!r.text.contains(never), "{never} in {:?}", r.text);
+        }
+        // While the agent has written nothing for a new prompt, the reply
+        // before it is the last one.
+        let more = reply_log()
+            + &json!({"type": "user", "isSidechain": false, "timestamp": "2026-10-05T10:00:00Z",
+                      "message": {"role": "user", "content": "Now the shade plants"}})
+            .to_string()
+            + "\n";
+        let log = write_log(dir.path(), "c2.jsonl", &more);
+        let r = last_reply(&log, "claude").unwrap();
+        assert_eq!((r.turn, r.at.as_str()), (2, "2026-10-05T09:00:09Z"));
+        assert!(r.text.ends_with("chives."));
+    }
+
+    #[test]
+    fn a_codex_rollout_gives_its_last_reply() {
+        let rollout = [
+            r#"{"timestamp":"2026-10-06T07:00:00Z","type":"session_meta","payload":{"id":"0199-abc","cwd":"/work/kite","timestamp":"2026-10-06T07:00:00Z"}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ENV</environment_context>"}]}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"How long should the kite tail be?"}]}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:03Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"REASONING"}]}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:04Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"ls\"]}"}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:05Z","type":"response_item","payload":{"type":"function_call_output","output":"CALL OUTPUT"}}"#,
+            r#"{"timestamp":"2026-10-06T07:00:06Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"About seven times the kite's length."}]}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let dir = tempfile::tempdir().unwrap();
+        let log = write_log(dir.path(), "r.jsonl", &rollout);
+        let r = last_reply(&log, "codex").unwrap();
+        assert_eq!(r.text, "About seven times the kite's length.");
+        assert_eq!(
+            (r.turn, r.at.as_str(), r.cut),
+            (1, "2026-10-06T07:00:06Z", false)
+        );
+    }
+
+    #[test]
+    fn a_long_reply_keeps_its_head_and_tail() {
+        let body: String = (0..4000)
+            .map(|i| format!("Line {i} about compost and worms. "))
+            .collect();
+        let text = format!("TOP OF THE REPORT {body} THE CONCLUSION");
+        let log = [
+            json!({"type": "user", "isSidechain": false, "timestamp": "2026-10-07T00:00:00Z",
+                   "message": {"role": "user", "content": "Report, please"}}),
+            json!({"type": "assistant", "isSidechain": false, "timestamp": "2026-10-07T00:01:00Z",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}),
+        ]
+        .map(|v| v.to_string())
+        .join("\n")
+            + "\n";
+        let dir = tempfile::tempdir().unwrap();
+        let r = last_reply(&write_log(dir.path(), "l.jsonl", &log), "claude").unwrap();
+        assert!(r.cut);
+        assert!(r.text.len() <= REPLY_MAX, "{}", r.text.len());
+        assert!(r.text.len() > REPLY_MAX - 100);
+        assert!(r.text.starts_with("TOP OF THE REPORT"));
+        assert!(r.text.ends_with("THE CONCLUSION"));
+        assert!(r.text.contains("characters left out"));
+        // Multi-byte text is cut on character boundaries.
+        let (t, cut) = head_and_tail(&"żółw ".repeat(30_000), REPLY_MAX);
+        assert!(cut && t.len() <= REPLY_MAX);
+        assert_eq!(
+            head_and_tail("short", REPLY_MAX),
+            ("short".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn a_log_without_a_reply_or_a_file_is_no_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let only_prompt =
+            json!({"type": "user", "isSidechain": false, "timestamp": "2026-10-07T00:00:00Z",
+            "message": {"role": "user", "content": "Hello"}})
+            .to_string()
+                + "\n";
+        let log = write_log(dir.path(), "p.jsonl", &only_prompt);
+        assert!(matches!(last_reply(&log, "claude"), Err(NoReply::NoLog(_))));
+        assert!(matches!(
+            last_reply(&dir.path().join("gone.jsonl"), "claude"),
+            Err(NoReply::NoLog(_))
+        ));
+    }
+
+    #[test]
+    fn logs_are_found_by_the_session_herdr_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let claude = write_log(
+            home,
+            ".claude/projects/-work-garden/c-42.jsonl",
+            &reply_log(),
+        );
+        let codex = write_log(
+            home,
+            ".codex/sessions/2026/10/06/rollout-2026-10-06T07-00-00-0199-abc.jsonl",
+            "{}\n",
+        );
+        let s = |agent: &str, kind: &str, value: &str| herdr::AgentSession {
+            agent: agent.into(),
+            kind: kind.into(),
+            value: value.into(),
+        };
+        assert_eq!(
+            find_log(home, "claude", Some(&s("claude", "id", "c-42"))),
+            Ok((claude.clone(), "claude"))
+        );
+        assert_eq!(
+            find_log(home, "codex", Some(&s("codex", "id", "0199-abc"))),
+            Ok((codex, "codex"))
+        );
+        assert_eq!(
+            find_log(
+                home,
+                "claude",
+                Some(&s("claude", "path", claude.to_str().unwrap()))
+            ),
+            Ok((claude, "claude"))
+        );
+        let other = write_log(home, "elsewhere/c-43.jsonl", "{}\n");
+        for (agent, session) in [
+            ("claude", Some(s("claude", "id", "c-404"))),
+            ("claude", Some(s("claude", "id", "../../elsewhere/c-43"))),
+            ("claude", Some(s("claude", "path", other.to_str().unwrap()))),
+            ("claude", Some(s("claude", "path", "/etc/passwd"))),
+            ("claude", Some(s("claude", "url", "c-42"))),
+            ("claude", None),
+            ("gemini", Some(s("gemini", "id", "c-42"))),
+            ("", None),
+        ] {
+            assert!(
+                matches!(
+                    find_log(home, agent, session.as_ref()),
+                    Err(NoReply::NoLog(_))
+                ),
+                "{agent} {session:?}"
+            );
+        }
     }
 
     fn roles(p: &Parsed) -> Vec<String> {

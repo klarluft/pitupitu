@@ -164,6 +164,7 @@ What is read: Claude Code's and Codex's own session logs on this machine (`~/.cl
 - what you typed, cut to 1000 characters, and what the agent answered, cut to 600;
 - for each tool the agent used, its name and one target: the file it edited or read, or the first 120 characters of the command it ran;
 - at most 32 KB per session: in a longer one the oldest turns are left out, except your first request;
+- when pitupitu asks, for instance to talk you through a long report a session wrote: a session's whole last reply, its text only, redacted the same way, at most 64 KB;
 - for the repositories those sessions worked in: the branch, HEAD, and the current branch's commits of the last 7 days (at most 50), with the subject line and how many files each changed.
 
 Never read or sent: file contents, edits' text, command output and other tool results, the agents' thinking, subagents' transcripts, anything else in `~/.claude` or `~/.codex`, credentials, author names or emails, diffs. Anything that looks like a key or password in what is sent becomes `[redacted]` first (`sk-…`, `ghp_…`, `Bearer …`, `password=…` and the like).

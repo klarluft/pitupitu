@@ -612,6 +612,21 @@ impl AgentHost for HerdrCli {
 mod kinds_tests {
     use super::parse_kinds;
 
+    /// `agent get` carries the agent's own session, which the box reads
+    /// and does not pass on.
+    #[test]
+    fn the_agent_session_is_read_and_not_sent_on() {
+        let result = serde_json::json!({"agent": {
+            "agent": "claude", "agent_status": "idle", "pane_id": "w1:p1", "workspace_id": "w1",
+            "cwd": "/work", "agent_session": {"agent": "claude", "kind": "id",
+            "source": "herdr:claude", "value": "0f0e-1d1c"}}});
+        let info = super::agent_from(result).unwrap();
+        let s = info.agent_session.as_ref().unwrap();
+        assert_eq!((s.kind.as_str(), s.value.as_str()), ("id", "0f0e-1d1c"));
+        let sent = serde_json::to_value(&info).unwrap();
+        assert!(sent.get("agent_session").is_none(), "{sent}");
+    }
+
     #[test]
     fn the_kinds_line_is_read_from_the_usage_text() {
         let usage = "herdr agent commands:\n  herdr agent list\n  targets accept unique agent names\n  kinds: pi|claude|codex|gemini|agy\n";
