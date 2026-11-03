@@ -18,6 +18,8 @@ qrcode = { version = "0.14", default-features = false }
 rand.workspace = true
 regex = "1"
 reqwest.workspace = true
+# OpenCode's and Kilo Code's session databases, read-only; SQLite built in.
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde.workspace = true
 # preserve_order: a tool's "first argument" is the first one it was given.
 serde_json = { workspace = true, features = ["preserve_order"] }
