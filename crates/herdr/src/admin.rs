@@ -69,12 +69,17 @@ impl HerdrCli {
 
     /// Start `herdr server` detached: a session and process group of its
     /// own, no terminal, its output dropped (herdr keeps its own logs),
-    /// never waited on by the caller. Stopping or restarting the box agent
+    /// never waited on by the caller. It gets the server environment when
+    /// one was given ([`HerdrCli::with_server_env`]): every pane inherits
+    /// it. Stopping or restarting the box agent
     /// does not stop it; nothing here ever does.
     pub fn start_server(&self) -> Result<()> {
         let mut cmd = std::process::Command::new(&self.bin);
         if let Some(s) = &self.session {
             cmd.args(["--session", s]);
+        }
+        if let Some(env) = &self.server_env {
+            env.apply_std(&mut cmd);
         }
         cmd.arg("server")
             .stdin(Stdio::null())
@@ -111,7 +116,9 @@ impl HerdrCli {
         if handoff {
             args.push("--handoff");
         }
-        self.checked(&args).await
+        // With a handoff herdr starts the new server from this command.
+        let (status, stdout, stderr) = self.exec_env(&args, true).await?;
+        checked_output(status, stdout, stderr)
     }
 
     /// `herdr integration install <kind>`: herdr's own hooks for that
@@ -123,16 +130,24 @@ impl HerdrCli {
     /// Run a command for its text; a failure carries its last line.
     async fn checked(&self, args: &[&str]) -> Result<String> {
         let (status, stdout, stderr) = self.exec(args).await?;
-        if !status.success() {
-            return Err(Error::Exit {
-                status: status.code().unwrap_or(-1),
-                stderr: last_line(&stderr)
-                    .or_else(|| last_line(&stdout))
-                    .unwrap_or_default(),
-            });
-        }
-        Ok(format!("{stdout}{stderr}"))
+        checked_output(status, stdout, stderr)
     }
+}
+
+fn checked_output(
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+) -> Result<String> {
+    if !status.success() {
+        return Err(Error::Exit {
+            status: status.code().unwrap_or(-1),
+            stderr: last_line(&stderr)
+                .or_else(|| last_line(&stdout))
+                .unwrap_or_default(),
+        });
+    }
+    Ok(format!("{stdout}{stderr}"))
 }
 
 pub(crate) fn last_line(text: &str) -> Option<String> {

@@ -4,6 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -31,6 +32,34 @@ pub struct HerdrCli {
     pub(crate) bin: String,
     /// A named herdr session (`--session`) instead of the default one.
     pub(crate) session: Option<String>,
+    /// The environment for a server this starts (`start_server`, `update
+    /// --handoff`), on top of this process's own. Every pane inherits the
+    /// server's environment.
+    pub(crate) server_env: Option<ServerEnv>,
+}
+
+/// Changes to the environment a herdr server is started with: variables
+/// set (or replaced) and variables removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerEnv {
+    pub set: Vec<(OsString, OsString)>,
+    pub remove: Vec<OsString>,
+}
+
+impl ServerEnv {
+    pub(crate) fn apply_std(&self, cmd: &mut std::process::Command) {
+        for k in &self.remove {
+            cmd.env_remove(k);
+        }
+        cmd.envs(self.set.iter().map(|(k, v)| (k, v)));
+    }
+
+    fn apply(&self, cmd: &mut Command) {
+        for k in &self.remove {
+            cmd.env_remove(k);
+        }
+        cmd.envs(self.set.iter().map(|(k, v)| (k, v)));
+    }
 }
 
 impl Default for HerdrCli {
@@ -50,6 +79,7 @@ impl HerdrCli {
         Self {
             bin: std::env::var("HERDR_BIN").unwrap_or_else(|_| "herdr".to_string()),
             session: std::env::var(SESSION_ENV).ok().filter(|s| !s.is_empty()),
+            server_env: None,
         }
     }
 
@@ -57,6 +87,7 @@ impl HerdrCli {
         Self {
             bin: bin.into(),
             session: None,
+            server_env: None,
         }
     }
 
@@ -64,6 +95,17 @@ impl HerdrCli {
     pub fn with_session(mut self, name: impl Into<String>) -> Self {
         self.session = Some(name.into());
         self
+    }
+
+    /// A server this starts gets `env` on top of this process's
+    /// environment.
+    pub fn with_server_env(mut self, env: ServerEnv) -> Self {
+        self.server_env = Some(env);
+        self
+    }
+
+    pub fn server_env(&self) -> Option<&ServerEnv> {
+        self.server_env.as_ref()
     }
 
     pub fn session(&self) -> Option<&str> {
@@ -160,11 +202,24 @@ impl HerdrCli {
         &self,
         args: &[&str],
     ) -> Result<(std::process::ExitStatus, String, String)> {
+        self.exec_env(args, false).await
+    }
+
+    /// [`exec`](Self::exec), with the server environment when `server`
+    /// (for a command that may start a server).
+    pub(crate) async fn exec_env(
+        &self,
+        args: &[&str],
+        server: bool,
+    ) -> Result<(std::process::ExitStatus, String, String)> {
         debug!(bin = %self.bin, ?args, "herdr");
         let mut tries = 0;
         let out = loop {
-            let run = self
-                .command()
+            let mut cmd = self.command();
+            if let (true, Some(env)) = (server, &self.server_env) {
+                env.apply(&mut cmd);
+            }
+            let run = cmd
                 .args(args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())

@@ -21,7 +21,7 @@ pub mod detect;
 mod types;
 
 pub use admin::{Status, SERVER_NOT_RUNNING};
-pub use cli::{HerdrCli, SESSION_ENV};
+pub use cli::{HerdrCli, ServerEnv, SESSION_ENV};
 pub use types::*;
 
 use async_trait::async_trait;

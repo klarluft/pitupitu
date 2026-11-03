@@ -184,7 +184,13 @@ impl Keeper {
             next.0 = Instant::now() + next.1;
             next.1 = (next.1 * 2).min(RETRY_MAX);
         }
-        match self.cli.start_server() {
+        // Started with what a terminal would give it: every pane
+        // inherits the server's environment.
+        let cli = self
+            .cli
+            .clone()
+            .with_server_env(crate::terminal_env::for_herdr().await);
+        match cli.start_server() {
             Ok(()) => {
                 info!(session = ?self.cli.session(), "started herdr's server");
                 true
@@ -261,6 +267,13 @@ pub async fn apply(cli: &HerdrCli, c: &HerdrCheck, handoff: bool) -> Result<Upda
             update::run_brew(&bin, "herdr").await?;
         }
         "installer" => {
+            // A handoff starts the new server from this command.
+            let cli = if handoff {
+                cli.clone()
+                    .with_server_env(crate::terminal_env::for_herdr().await)
+            } else {
+                cli.clone()
+            };
             cli.update(handoff).await.map_err(|e| {
                 Refused::Failed(match e {
                     herdr::Error::Exit { stderr, .. } if !stderr.is_empty() => stderr,
