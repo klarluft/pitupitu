@@ -57,20 +57,25 @@ pub fn request(config: &Path) -> std::io::Result<()> {
 /// The service, at its start: when setup asked, open each folder once (in
 /// the background: macOS holds each open until the person answers) and
 /// write down what was allowed.
+/// The request stays until the answer is written, so a box agent that
+/// stops before then asks again at its next start.
 pub fn answer_if_asked(config: &Path) {
-    if !cfg!(target_os = "macos") || std::fs::remove_file(request_file(config)).is_err() {
+    if !cfg!(target_os = "macos") || !request_file(config).exists() {
         return;
     }
     let config = config.to_path_buf();
-    std::thread::spawn(move || {
-        let home = crate::config::home_dir();
-        let found = check(&home);
-        let allowed = found.iter().filter(|f| f.allowed).count();
-        tracing::info!(folders = found.len(), allowed, "macOS folder access");
-        if let Ok(json) = serde_json::to_vec(&found) {
-            let _ = std::fs::write(result_file(&config), json);
+    std::thread::spawn(move || answer(&config, &crate::config::home_dir()));
+}
+
+fn answer(config: &Path, home: &Path) {
+    let found = check(home);
+    let allowed = found.iter().filter(|f| f.allowed).count();
+    tracing::info!(folders = found.len(), allowed, "macOS folder access");
+    if let Ok(json) = serde_json::to_vec(&found) {
+        if std::fs::write(result_file(config), json).is_ok() {
+            let _ = std::fs::remove_file(request_file(config));
         }
-    });
+    }
 }
 
 /// Opens each folder that exists under `home`: allowed when it can be
@@ -151,15 +156,21 @@ mod tests {
     #[test]
     fn a_request_is_answered_once_and_read_back() {
         let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("Documents")).unwrap();
         let config = dir.path().join("pitupitu.toml");
         request(&config).unwrap();
         assert!(request_file(&config).exists());
         assert_eq!(last(&config), None);
+        answer(&config, home.path());
+        assert!(
+            !request_file(&config).exists(),
+            "answered, so no longer asked"
+        );
         let found = vec![Folder {
             name: "Documents".into(),
-            allowed: false,
+            allowed: true,
         }];
-        std::fs::write(result_file(&config), serde_json::to_vec(&found).unwrap()).unwrap();
         assert_eq!(wait(&config, Duration::from_millis(10)), Some(found));
         // A new request forgets the old answer.
         request(&config).unwrap();
