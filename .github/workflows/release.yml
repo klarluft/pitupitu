@@ -4,6 +4,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Builds and packages (signed, on macOS) without releasing anything, to
+  # check the packaging before a tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,10 +34,22 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked --target ${{ matrix.target }} -p pitupitu
       - name: Package
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          REQUIRE_SIGNING: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '' }}
         run: |
           name=pitupitu-${{ matrix.target }}
           mkdir "$name"
-          cp target/${{ matrix.target }}/release/pitupitu LICENSE README.md "$name/"
+          cp LICENSE README.md "$name/"
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            # `pitupitu` and `pitupitu.app`, signed: macOS keeps privacy
+            # answers across updates only for signed builds.
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            packaging/macos/package.sh target/${{ matrix.target }}/release/pitupitu "$name" "$version"
+          else
+            cp target/${{ matrix.target }}/release/pitupitu "$name/"
+          fi
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
@@ -44,6 +59,7 @@ jobs:
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

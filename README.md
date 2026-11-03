@@ -117,6 +117,7 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 5. **History** (not asked, on by default): setup says in one line that pitupitu keeps track of your projects by reading what your agents did on this machine, and where to switch it off. See [History](#history).
 6. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for the agents it finds, their sessions are set to come back after herdr restarts (`herdr integration install claude` and `codex`).
 7. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
+8. **Your folders, on macOS**: macOS asks before a program opens your Desktop, Documents, Downloads or iCloud Drive, and agents running in a herdr that pitupitu started are asked about as pitupitu (in a herdr you opened from your terminal, as your terminal app). So that this comes up now, while you are at the Mac, and not later while you are away with only your phone, the service opens each folder once as it starts: click Allow. Release builds are signed, so the answer stays through updates. `pitupitu status` shows what was allowed; to change it: System Settings › Privacy & Security › Files and Folders › pitupitu.
 
 Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 
@@ -126,7 +127,7 @@ Then open [pitupitu.chat/app](https://pitupitu.chat/app).
 |---|---|
 | `pitupitu setup` | sign in, pitupitu's folder, which agent to use, herdr, starting by itself (`--home`, `--relink`, `--box`, `--no-service`, `--no-browser`, `--no-qr`, `--linger`, `--no-linger`) |
 | `pitupitu connect` | hold the link open in the foreground (what the service runs) |
-| `pitupitu status` | account, home folder, herdr (version, server, newer release), agents found, service and version as this box sees them |
+| `pitupitu status` | account, home folder, herdr (version, server, newer release), agents found, service and version as this box sees them, and on macOS which folders pitupitu may open |
 | `pitupitu settings` | your preferences, default box, agent and models, updates, voice, and every box with its note, on/off, agent and history |
 | `pitupitu prefs` | show your preferences; `prefs edit`, `prefs set <file>` (`-` for stdin), `prefs clear` |
 | `pitupitu box note <text>` | one line about this box ("client work, Acme"); `--clear` |

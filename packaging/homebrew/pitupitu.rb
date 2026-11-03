@@ -33,7 +33,14 @@ class Pitupitu < Formula
   end
 
   def install
-    bin.install "pitupitu"
+    if OS.mac? && File.directory?("pitupitu.app")
+      # The signed app: macOS remembers the person's privacy answers by its
+      # identifier, which survives upgrades (the Cellar folder does not).
+      prefix.install "pitupitu.app"
+      bin.install_symlink prefix/"pitupitu.app/Contents/MacOS/pitupitu"
+    else
+      bin.install "pitupitu"
+    end
   end
 
   def caveats

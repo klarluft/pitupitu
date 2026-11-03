@@ -10,6 +10,7 @@ pub mod home;
 pub mod inventory;
 pub mod link;
 pub mod list;
+pub mod mac_folders;
 pub mod service;
 pub mod sessions;
 pub mod settings;

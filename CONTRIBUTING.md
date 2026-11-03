@@ -29,7 +29,7 @@ Maintainers release by pushing a tag:
    git push origin v0.5.0
    ```
 
-3. `.github/workflows/release.yml` builds four targets (Linux x86_64 and arm64 with musl, macOS x86_64 and arm64), packages each with a `.sha256`, fills in the Homebrew formula from those checksums (`packaging/homebrew/`), and publishes a GitHub release with the tarballs, `pitupitu.rb` and generated notes. `install.sh` downloads from the latest release.
+3. `.github/workflows/release.yml` builds four targets (Linux x86_64 and arm64 with musl, macOS x86_64 and arm64), packages each with a `.sha256` (the macOS ones as `pitupitu` and `pitupitu.app`, signed with the Developer ID from the `MACOS_SIGN_P12` secrets by `packaging/macos/package.sh`; a tag build without them fails), fills in the Homebrew formula from those checksums (`packaging/homebrew/`), and publishes a GitHub release with the tarballs, `pitupitu.rb` and generated notes. `install.sh` downloads from the latest release.
 4. `klarluft/homebrew-tap` copies `pitupitu.rb` from the latest release within a few hours. To pick it up now: `gh workflow run bump-pitupitu.yml --repo klarluft/homebrew-tap`.
 
 The cloud accepts the current and the previous box protocol, so a release that bumps the protocol needs the cloud side live first.
