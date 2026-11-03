@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock Claude Code and Codex by voice, from your phone or any browser.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from your phone or any browser.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
 
@@ -62,7 +62,7 @@ curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/
 pitupitu setup                                  # sign in with a code, pick a folder, start the service
 ```
 
-Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
+Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
 
 ## How it works
 
@@ -159,7 +159,17 @@ Environment: `PITUPITU_CONFIG` (config file), `PITUPITU_CLOUD_URL`, `PITUPITU_CL
 
 Reading what your agents did is how pitupitu keeps track of your projects: it can tell you what you were doing on the laptop yesterday, or what is left on a project, including the sessions you started yourself. So it is on by default, for each machine on its own, and `pitupitu setup` asks nothing about it; it says so in one line and links [pitupitu.chat/privacy](https://pitupitu.chat/privacy).
 
-What is read: Claude Code's and Codex's own session logs on this machine (`~/.claude/projects/*/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), the sessions of the last 7 days, at most the newest 300, and `git` in the repositories they worked in. What is sent:
+What is read: your agents' own session logs on this machine, the sessions of the last 7 days, at most the newest 300, and `git` in the repositories they worked in. The logs are:
+
+- Claude Code: `~/.claude/projects/*/*.jsonl`
+- Codex: `~/.codex/sessions/**/*.jsonl`
+- Kiro CLI: `~/.kiro/sessions/*/sess_*/messages.jsonl` and the `session.json` beside it (its folder and title)
+- pi: `~/.pi/agent/sessions/*/*.jsonl`
+- Qwen Code: `~/.qwen/projects/*/chats/*.jsonl`
+- Cline: `~/.cline/data/sessions/<id>/<id>.messages.json` and the `<id>.json` beside it (its folder and title)
+- OpenCode and Kilo Code: the `session`, `message` and `part` tables of `~/.local/share/opencode/opencode.db` and `~/.local/share/kilo/kilo.db`, opened read-only; no other table of those databases is ever queried
+
+What is sent:
 
 - each session's folder, its repository (root, `origin` remote without any password in it, branch), when it ran and its title;
 - what you typed, cut to 1000 characters, and what the agent answered, cut to 600;
@@ -168,7 +178,7 @@ What is read: Claude Code's and Codex's own session logs on this machine (`~/.cl
 - when pitupitu asks, for instance to talk you through a long report a session wrote: a session's whole last reply, its text only, redacted the same way, at most 64 KB;
 - for the repositories those sessions worked in: the branch, HEAD, and the current branch's commits of the last 7 days (at most 50), with the subject line and how many files each changed.
 
-Never read or sent: file contents, edits' text, command output and other tool results, the agents' thinking, subagents' transcripts, anything else in `~/.claude` or `~/.codex`, credentials, author names or emails, diffs. Anything that looks like a key or password in what is sent becomes `[redacted]` first (`sk-…`, `ghp_…`, `Bearer …`, `password=…` and the like).
+Never read or sent: file contents, edits' text, command output and other tool results, the agents' thinking, subagents' transcripts, anything else in those agents' folders (their settings, credentials, the other tables of a database), credentials of any kind, author names or emails, diffs. Anything that looks like a key or password in what is sent becomes `[redacted]` first (`sk-…`, `ghp_…`, `Bearer …`, `password=…` and the like).
 
 To switch it off: `pitupitu box history off` (or on the page). It stops at once, and the box removes its small record of what it already sent (`history.json` in its state folder); what pitupitu already stored is deleted on the app page, under What pitupitu knows. `pitupitu box history on` switches it back on, and `pitupitu settings` shows which it is for every machine. The exact format is in [docs/box-link.md](docs/box-link.md#history).
 
