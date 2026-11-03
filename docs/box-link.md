@@ -38,14 +38,18 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 7, "version": "0.9.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 8, "version": "0.11.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
  "herdr": {"version": "0.9.3", "protocol": 22, "running": true, "latest": "0.9.5",
            "restart_needed": false, "install": "installer"},
  "kinds": ["claude", "codex", "gemini", "agy", …],
- "available": [{"kind": "claude", "version": "2.3.1 (Claude Code)"}],
+ "available": [{"kind": "claude", "version": "2.3.1 (Claude Code)", "command": "claude",
+                "signed_in": null, "models": null, "models_at": "2026-11-03T10:00:00Z", "models_error": null},
+               {"kind": "kiro", "version": "kiro-cli 2.37.1", "command": "kiro-cli", "signed_in": true,
+                "models": [{"id": "auto", "name": null, "provider": null, "note": "1.0x credits", "default": true}, …],
+                "models_at": "2026-11-03T10:00:00Z", "models_error": null}],
  "recent": [{"path": "/home/me/code/app", "agent": "claude", "at": "2026-10-17T20:00:00Z"}]}
 ```
 
@@ -55,10 +59,10 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `latest`: a newer release of the box agent than this one, as `"0.5.1"`, or null. The box asks GitHub (`klarluft/pitupitu` releases) when it starts and every six hours.
 - `herdr`: null when herdr is not installed. `version` and `protocol` are the installed herdr's version and socket protocol (`herdr status`); `running` whether its server answers right now (the box starts one when it does not, below); `latest` a newer herdr release (`herdrdev/herdr` on GitHub, asked on the same schedule) or null; `restart_needed` whether the running server is older than the binary after an update (herdr says `restart_needed` or `server_binary_stale`, or the server reports another version than the binary; it keeps working, new server-side features wait for a restart); `install` is `brew` (under a Cellar), `installer` (where herdr's own installer puts it: `~/.local/bin`, `$HERDR_INSTALL_DIR`) or `other` (mise, Nix, a build of one's own), which the box does not update.
 - `kinds`: the agent kinds herdr can start (`herdr agent`'s list). Empty while herdr does not answer. The cloud refuses a kind not in it before anything is opened (`sessions.md`, "Kinds").
-- `available`: the agent CLIs found on `PATH` (`claude`, `codex`, `gemini`, `agy`, `opencode`) with the first line of `--version`. Whether they are logged in is not checked: that would mean reading their credentials, which the box never does.
+- `available`: the coding agents ("harnesses") found on `PATH`, one per profile ("Harnesses", below) whose `command` answers `--version`, with the first line it printed, and what the harness's lister last said: `signed_in` (`null` when the harness cannot say), `models` (`null` when not listed: no lister, signed out, or the lister failed, `models_error` saying which, in plain words), and `models_at`, when the lister ran. The box never reads an agent's credentials to tell whether it is signed in; only a lister that asks the agent itself (Kiro CLI's `whoami`) says so.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 7 had the same `hello` with `available` holding `kind` and `version` only, for five kinds (`claude`, `codex`, `gemini`, `agy`, `opencode`), no `harnesses` note and no `refresh_models`. Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
@@ -74,6 +78,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `close_session` | `pane` | `null`; since 0.7, below |
 | `focus_session` | `pane` | `null`; protocol 6, below |
 | `last_message` | `agent` | `{"text", "at", "turn", "cut"}`; protocol 7, below |
+| `refresh_models` | `kind?` (every harness when absent) | `[Available]`, the entries refreshed: the listers run now (below). Errors: `api` with code `unknown_kind`. The box gives itself 15 s; protocol 8 |
 | `start_agent` | `name`, `kind`, `pane`, `accept_trust_prompt`, `timeout_ms?`, `agent_args?` | `AgentInfo` |
 | `prompt` | `agent`, `text` | `AgentInfo` (the state before the agent reacted) |
 | `agent` | `agent` | `AgentInfo` |
@@ -137,7 +142,41 @@ Runs the update the way the thing was installed, exactly as `pitupitu update [bo
 
 - `settings`: `{"note": "settings", "history": true | false, "resend": true}` (`resend` optional), right after `hello` and whenever the person changes it. `history: true` means: read the agents' own session logs on this box, send `session` and `git` notes, and answer `last_message`. `false` means: send nothing of the kind, refuse `last_message` (`history_off`) and remove the reader's state. The default is the cloud's, and it is on: a box that never switched history off is sent `true`. Until the note comes, the box reads nothing. `resend: true` (with `history: true`, after the person asked the cloud to rebuild what it knows) sends everything again from the start. The box keeps nothing about the setting itself; the cloud says it again on every link. Other fields are ignored, so a note with protocol 2's `driver` and no `history` is no setting at all.
 
+- `harnesses`: `{"note": "harnesses", "revision": "…", "profiles": [<Profile>…]}`, right after `settings` and whenever the cloud's profiles change (protocol 8). The box uses them at once instead of the copy built into its release, keeps them for its next start, and runs the listers again (below).
+
 No other note from the cloud is acted on.
+
+## Harnesses
+
+Every kind herdr can start is a harness the box looks for. What the box knows about each is a profile; the cloud sends the current ones, and the release carries a copy for when it has none:
+
+```json
+{"kind": "kiro", "name": "Kiro CLI", "command": "kiro-cli", "lister": "kiro", "integration": null,
+ "screens": {"trust": ["Trust this workspace?"], "trust_yes": ["Trust, continue"],
+             "approval": ["requires approval"], "login": ["let's get you signed in"],
+             "model_unavailable": ["is not available"],
+             "dismiss": [{"phrases": ["ClinePass"], "keys": ["esc"]}]}}
+```
+
+Fields the box does not use are ignored. What a profile can and cannot make the box do:
+
+- `command`: looked for on `PATH` and run with `--version`, nothing else. Only a bare name (`^[a-z0-9][a-z0-9._-]{0,31}$`) is taken; a profile with a path is dropped.
+- `lister`: which of the box's own listers applies, by name; an unknown name lists nothing. The listers are fixed in the box's code (`crates/pitupitu/src/harness.rs`), each a fixed command, run with nothing on standard input, no terminal, `NO_COLOR=1`, a 10 s limit and at most 1 MB of output, when the box starts, every six hours, after a `harnesses` note and on `refresh_models`:
+
+  | lister | runs or reads | gives |
+  |---|---|---|
+  | `claude` | nothing (the cloud knows Claude Code's aliases and ids) | — |
+  | `codex` | `codex debug models` | the catalog's ids and names, hidden ones left out |
+  | `kiro` | `kiro-cli whoami`, then only when signed in `kiro-cli chat --list-models --format json` | `signed_in`; ids, credit rates as `note`, the default |
+  | `opencode`, `kilo` | `opencode models`, `kilo models` | one `provider/model` per line |
+  | `pi` | `pi --list-models` | the table's provider and model |
+  | `agy` | `agy models` | ids and names |
+  | `qwen_settings` | `~/.qwen/settings.json` | `modelProviders.*[].id` and `name`, and the default; nothing else in the file is read |
+  | `cline_settings` | `~/.cline/data/settings/models.json` | `providers.*.models.*` ids; the provider settings and tokens are in other files, never read |
+
+  A lister that would need a sign-in says `signed_in: false` and never starts one. At most 200 models per harness.
+- `screens`: phrases that add to the box's own dialog detection (`sessions.md`, "Dialogs"), matched in the bottom 18 lines: `trust` a folder trust question, answered (when `start_agent` says `accept_trust_prompt`) by the option containing a `trust_yes` phrase, never one that also says "without asking", "don't ask", "auto-approve", "yolo", "bypass", "dangerously" or "always allow"; `approval` a question for the person; `login` not signed in; `dismiss` a first-run screen that is neither (an advert), closed during `start_agent` with Esc, the only key a profile can name. `model_unavailable` is the cloud's.
+- `integration`: the name `pitupitu setup` passes to `herdr integration install` for a harness it finds, so herdr resumes its sessions after a restart and reports its session id.
 
 ## History
 
@@ -199,4 +238,4 @@ What the states, counters and error codes mean is in [`sessions.md`](sessions.md
 - **The server.** herdr starts no server by itself: with none running, every call fails with `server_not_running`. The box starts `herdr server` before `hello` and whenever its once-a-second `agent list` finds none running, detached (a session and process group of its own, no terminal, not part of the user service) and with the environment a terminal would give it (`terminal_env.rs`: the login shell's variables the box lacks, the login shell's `PATH` entries added to its own, on WSL the interop socket, distro name, Windows `PATH` and WSLg variables when missing; the service manager's and herdr's per-pane variables left out), with a pause between tries that grows from 5 s to 5 min. It never stops a server. A herdr you opened is used as it is; one the box started is what `herdr` attaches to later. Everything is in herdr's default session.
 - **Workspaces and tabs.** A place is a herdr workspace (`workspace create --cwd --label --no-focus`); a task in it is a tab. Scratch work goes into tabs of one `pitupitu` workspace (`create_workspace` with `scratch`). pitupitu closes only what it created, and a session the person asked it to stop (`close_session`). It moves the focus only when the person asks to see a session (`focus_session`).
 - **Seeing a session.** `herdr` on that machine, or `herdr --remote <machine>` over SSH.
-- **Installed and updated by pitupitu, when asked.** `install.sh` and `pitupitu setup` install herdr with its own installer when it is missing, and `setup` runs `herdr integration install` for Claude Code and Codex so herdr resumes their sessions after a restart. Updates run only through `pitupitu update herdr` or the `update` call.
+- **Installed and updated by pitupitu, when asked.** `install.sh` and `pitupitu setup` install herdr with its own installer when it is missing, and `setup` runs `herdr integration install` for every harness found that herdr has an integration for (the profile's `integration`), so herdr resumes their sessions after a restart. Updates run only through `pitupitu update herdr` or the `update` call.

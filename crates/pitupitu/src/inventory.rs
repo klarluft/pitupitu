@@ -17,8 +17,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// Agent CLIs looked for on `PATH`.
-const KINDS: &[&str] = &["claude", "codex", "gemini", "agy", "opencode"];
 /// Recent folders sent, newest first.
 const RECENT_MAX: usize = 30;
 /// Session files looked at, newest first.
@@ -30,6 +28,25 @@ const LINES_MAX: usize = 25;
 pub struct Available {
     pub kind: String,
     pub version: String,
+    /// The command herdr runs for the kind (`kiro-cli` for `kiro`).
+    pub command: String,
+    /// From the harness's lister; `None` when it cannot say.
+    pub signed_in: Option<bool>,
+    /// From the harness's lister; `None` when not listed.
+    pub models: Option<Vec<crate::harness::Model>>,
+    pub models_at: Option<String>,
+    pub models_error: Option<String>,
+}
+
+/// `a` with what its lister last said.
+pub fn with_listed(mut a: Available) -> Available {
+    if let Some(l) = crate::harness::listed(&a.kind) {
+        a.signed_in = l.signed_in;
+        a.models = l.models;
+        a.models_at = l.at;
+        a.models_error = l.error;
+    }
+    a
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -55,26 +72,42 @@ pub struct Inventory {
     pub recent: Vec<Recent>,
 }
 
-/// The agent CLIs on `PATH`, each with what `--version` printed.
+/// The harnesses on `PATH` (every profile's command, `docs/box-link.md`,
+/// "Harnesses"), each with what `--version` printed and what its lister
+/// last said.
 pub async fn available() -> Vec<Available> {
-    let mut out = Vec::new();
-    for kind in KINDS {
-        let run = tokio::process::Command::new(kind)
+    let checks = crate::harness::profiles().into_iter().map(|p| async move {
+        if !crate::harness::command_ok(&p.command) {
+            return None;
+        }
+        let run = tokio::process::Command::new(&p.command)
             .arg("--version")
+            .env("NO_COLOR", "1")
             .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .output();
-        if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(5), run).await {
-            if o.status.success() {
+        match tokio::time::timeout(Duration::from_secs(5), run).await {
+            Ok(Ok(o)) if o.status.success() => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                out.push(Available {
-                    kind: kind.to_string(),
+                Some(with_listed(Available {
+                    kind: p.kind.clone(),
                     version: text.lines().next().unwrap_or("").trim().to_string(),
-                });
+                    command: p.command.clone(),
+                    signed_in: None,
+                    models: None,
+                    models_at: None,
+                    models_error: None,
+                }))
             }
+            _ => None,
         }
-    }
-    out
+    });
+    futures_util::future::join_all(checks)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Recent project folders from the agents' session history under `home`

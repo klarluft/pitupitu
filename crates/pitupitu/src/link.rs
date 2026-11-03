@@ -24,7 +24,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -41,6 +41,10 @@ const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// How often `herdr status` is read again (an update made at the
 /// keyboard, a server that now needs a restart).
 const STATUS_EVERY: Duration = Duration::from_secs(60);
+/// How often the harnesses' listers run again (models and sign-in).
+const LISTERS_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// The longest a `refresh_models` call may take (the cloud waits 20 s).
+const REFRESH_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 /// The longest an `update` call may take.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -129,6 +133,12 @@ impl Link {
     /// Connect, serve, reconnect with backoff, until another box replaces
     /// this one.
     pub async fn run(&self) -> Result<()> {
+        // The profiles the cloud sent last time, until it sends new ones;
+        // with herdr itself, the harnesses' listers now and every six hours.
+        crate::harness::load(&self.state_dir);
+        if self.keeper.is_some() {
+            crate::harness::spawn_refresher(crate::config::home_dir(), LISTERS_EVERY);
+        }
         let mut backoff = BACKOFF_MIN;
         loop {
             let started = Instant::now();
@@ -340,6 +350,19 @@ impl Link {
                     history_on.store(s.history, Ordering::SeqCst);
                     let _ = settings.send(s);
                 }
+                ("harnesses", _) => {
+                    if crate::harness::apply_note(&value, Some(&self.state_dir)) {
+                        debug!("harness profiles from the cloud");
+                        // The profiles may name other commands and listers.
+                        if self.keeper.is_some() {
+                            tokio::spawn(async {
+                                crate::harness::refresh(None, &crate::config::home_dir()).await;
+                            });
+                        }
+                    } else {
+                        warn!("unreadable harnesses note");
+                    }
+                }
                 _ => debug!(note, "note from the cloud"),
             }
             return;
@@ -354,6 +377,25 @@ impl Link {
             .unwrap_or_default()
             .to_string();
         let args = value.get("args").cloned().unwrap_or(Value::Null);
+        if call == "refresh_models" {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let kind = args.get("kind").and_then(Value::as_str).map(str::to_string);
+                let home = crate::config::home_dir();
+                let run = crate::harness::refresh(kind.as_deref(), &home);
+                let reply = match tokio::time::timeout(REFRESH_MODELS_TIMEOUT, run).await {
+                    Ok(Some(list)) => json!({"id": id, "ok": list}),
+                    Ok(None) => {
+                        json!({"id": id, "err": CallError::api("unknown_kind", "no such harness")})
+                    }
+                    Err(_) => {
+                        json!({"id": id, "err": CallError::timeout("the listers took over 15 seconds")})
+                    }
+                };
+                let _ = tx.send(reply.into()).await;
+            });
+            return;
+        }
         if call == "update" {
             let keeper = self.keeper.clone();
             let tx = tx.clone();
@@ -619,6 +661,13 @@ async fn poll(
                 }
                 continue;
             }
+            _ = crate::harness::CHANGED.notified(), if p.keeper.is_some() => {
+                let available = inventory::available().await;
+                if !p.inventory(&tx, |i| i.available = available).await {
+                    return;
+                }
+                continue;
+            }
             _ = status_tick.tick() => herdr_changed = true,
             _ = refresh.notified() => herdr_changed = true,
         }
@@ -736,6 +785,11 @@ mod tests {
             available: vec![Available {
                 kind: "claude".into(),
                 version: "2.3.1 (Claude Code)".into(),
+                command: "claude".into(),
+                signed_in: None,
+                models: None,
+                models_at: None,
+                models_error: None,
             }],
             history: None,
             state_dir: home.join(".state"),
@@ -761,7 +815,7 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 7);
+        assert_eq!(hello["protocol"], 8);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], Value::Null);
         assert!(hello.get("driver").is_none());
@@ -796,6 +850,16 @@ mod tests {
         assert_eq!(by_id(2)["ok"], "screen of notes, 40 lines");
         assert_eq!(by_id(3)["err"]["kind"], "bad_call");
         assert_eq!(by_id(1)["ok"]["name"], "slow");
+
+        // Protocol 8: a harness the profiles do not name is refused.
+        ws.send(text(
+            &json!({"id": 4, "call": "refresh_models", "args": {"kind": "nope"}}),
+        ))
+        .await
+        .unwrap();
+        let r = next_json(&mut ws).await;
+        assert_eq!(r["id"], 4);
+        assert_eq!(r["err"]["code"], "unknown_kind");
 
         // A change in herdr becomes an agents note; so does an edit at home.
         host.agents.lock().unwrap()[0] = agent("notes", "w1:p1", AgentStatus::Done, 6);

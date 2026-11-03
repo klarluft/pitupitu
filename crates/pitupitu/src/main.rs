@@ -116,15 +116,16 @@ enum Cmd {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::UPDATES))]
         mode: String,
     },
-    /// The agent a session gets when you don't say: claude, codex, or auto
-    /// (whatever the machine has, Claude first).
+    /// The agent a session gets when you don't say: claude, codex, kiro,
+    /// opencode, … or auto (the one the machine has; with several,
+    /// pitupitu asks).
     Agent {
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENTS))]
         name: String,
     },
     /// The model an agent runs on when you don't say (`pitupitu model claude opus`).
     Model {
-        /// claude or codex.
+        /// The agent: claude, codex, kiro, opencode, ….
         #[arg(value_parser = clap::builder::PossibleValuesParser::new(settings::AGENT_KINDS))]
         agent: String,
         /// The model as the CLI names it (opus, sonnet, gpt-5, …).
@@ -1330,22 +1331,22 @@ async fn setup(
         || terminal && {
             eprintln!();
             ask_yes(
-                "Let Claude Code and Codex change pitupitu's settings for you? (installs a skill)",
+                "Let your coding agents change pitupitu's settings for you? (installs a skill)",
                 true,
             )
         };
     if wanted {
         match skill::sync(&user_home, skill::Mode::Install) {
             Ok(done) if done.is_empty() && !offered => {
-                if has_claude_or_codex(&installed) {
+                if !installed.is_empty() {
                     eprintln!(
-                        "  Claude Code and Codex have not been used on this machine yet; once \
+                        "  your coding agents have not been used on this machine yet; once \
                          one has, run: pitupitu skill install"
                     )
                 } else {
                     eprintln!(
-                        "  no Claude Code or Codex on this machine yet; once there is, run: \
-                         pitupitu skill install"
+                        "  no coding agent on this machine yet; once there is, run: pitupitu \
+                         skill install"
                     )
                 }
             }
@@ -1408,10 +1409,7 @@ async fn setup(
 /// say, and save it as the account's default (`pitupitu agent`). Enter is
 /// Claude Code. A failure to reach the cloud is said and setup goes on.
 async fn setup_default_agent(path: &std::path::Path, terminal: bool, installed: &[&str]) {
-    if !terminal {
-        return;
-    }
-    if !(installed.contains(&"claude") && installed.contains(&"codex")) {
+    if !terminal || installed.len() < 2 {
         return;
     }
     let cfg = match Config::load(path) {
@@ -1431,35 +1429,50 @@ async fn setup_default_agent(path: &std::path::Path, terminal: bool, installed: 
     if !settings::ask_default_agent(terminal, installed, &current["default_agent"]) {
         return;
     }
+    let profiles = pitupitu::harness::profiles();
+    let options: Vec<(&str, String)> = installed
+        .iter()
+        .map(|k| {
+            let name = profiles
+                .iter()
+                .find(|p| p.kind == *k)
+                .map(|p| p.name())
+                .unwrap_or_else(|| k.to_string());
+            (*k, name)
+        })
+        .collect();
     eprintln!();
-    eprintln!("  This machine has both Claude Code and Codex.");
-    eprintln!("  Which one should pitupitu use when you don't say? You can still ask for the");
-    eprintln!("  other one by name any time.");
-    eprintln!("    1. Claude Code");
-    eprintln!("    2. Codex");
+    eprintln!("  This machine has several coding agents.");
+    eprintln!("  Which one should pitupitu use when you don't say? You can still ask for any");
+    eprintln!("  of them by name.");
+    for (i, (_, name)) in options.iter().enumerate() {
+        eprintln!("    {}. {name}", i + 1);
+    }
     let agent = loop {
-        eprint!("  Type 1 or 2 (press Enter for Claude Code) [1]: ");
-        if let Some(a) = settings::default_agent_answer(&read_answer()) {
+        eprint!(
+            "  Type a number from 1 to {} (press Enter to decide later): ",
+            options.len()
+        );
+        if let Some(a) = settings::default_agent_answer(&read_answer(), &options) {
             break a;
         }
-        eprintln!("  Type 1 or 2.");
+        eprintln!("  Type a number from 1 to {}.", options.len());
     };
-    let name = if agent == "claude" {
-        "Claude Code"
-    } else {
-        "Codex"
+    let Some(agent) = agent else {
+        eprintln!(
+            "  pitupitu will ask the first time it matters; to set it: pitupitu agent <name>"
+        );
+        return;
     };
+    let name = options
+        .iter()
+        .find(|(k, _)| *k == agent)
+        .map(|(_, n)| n.clone())
+        .unwrap_or_else(|| agent.to_string());
     match settings::patch(&cfg, json!({"default_agent": agent})).await {
-        Ok(_) => {
-            eprintln!("  pitupitu will use {name}; to change it later: pitupitu agent claude|codex")
-        }
+        Ok(_) => eprintln!("  pitupitu will use {name}; to change it later: pitupitu agent <name>"),
         Err(e) => eprintln!("  could not save it: {e:#}; to set it later: pitupitu agent {agent}"),
     }
-}
-
-/// Whether Claude Code or Codex is on PATH (`installed`: the agent CLIs found).
-fn has_claude_or_codex(installed: &[&str]) -> bool {
-    installed.iter().any(|k| *k == "claude" || *k == "codex")
 }
 
 /// herdr is how pitupitu runs agents: installed with its own installer
@@ -1490,11 +1503,17 @@ async fn setup_herdr() {
         }
     };
     let cli = HerdrCli::with_binary(bin.display().to_string());
-    for (kind, name) in [("claude", "Claude Code"), ("codex", "Codex")] {
-        if herdr_box::on_path(kind).is_none() {
+    // The profiles the cloud sent last, when the service has linked before.
+    pitupitu::harness::load(&pitupitu::config::state_dir());
+    for profile in pitupitu::harness::profiles() {
+        let Some(integration) = profile.integration.as_deref() else {
+            continue;
+        };
+        if herdr_box::on_path(&profile.command).is_none() {
             continue;
         }
-        match cli.integration_install(kind).await {
+        let name = profile.name();
+        match cli.integration_install(integration).await {
             Ok(_) => eprintln!(
                 "  {name} sessions will come back after a restart (herdr integration installed)"
             ),
