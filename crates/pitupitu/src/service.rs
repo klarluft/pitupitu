@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 
 const UNIT: &str = "pitupitu.service";
 const LABEL: &str = "chat.pitupitu.box";
+/// The identifier the macOS release is signed with (and its app's bundle
+/// identifier): what macOS shows in Login Items and remembers privacy
+/// answers by.
+const BUNDLE_ID: &str = "chat.pitupitu.box";
 
 pub struct Installed {
     pub file: PathBuf,
@@ -28,15 +32,25 @@ pub fn exe() -> Result<PathBuf> {
     })
 }
 
-/// Homebrew runs us from `<prefix>/Cellar/<formula>/<version>/bin/<name>`,
+/// Homebrew runs us from `<prefix>/Cellar/<formula>/<version>/bin/<name>`
+/// (on macOS from inside the app there,
+/// `<prefix>/Cellar/<formula>/<version>/pitupitu.app/Contents/MacOS/<name>`),
 /// a folder `brew upgrade` deletes. Its `<prefix>/opt/<formula>` link
 /// follows upgrades, so the service is pointed there instead.
 fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
-    let name = exe.file_name()?;
-    let bin = exe.parent()?;
-    let formula_dir = bin.parent()?.parent()?;
+    let formula_dir = exe
+        .ancestors()
+        .find(|a| a.parent().and_then(Path::file_name) == Some("Cellar".as_ref()))?;
     let cellar = formula_dir.parent()?;
-    if bin.file_name()? != "bin" || cellar.file_name()? != "Cellar" {
+    let rest: PathBuf = exe
+        .strip_prefix(formula_dir)
+        .ok()?
+        .components()
+        .skip(1)
+        .collect();
+    let in_bin = rest.parent() == Some(Path::new("bin"));
+    let in_app = rest.starts_with("pitupitu.app/Contents/MacOS") && rest.components().count() == 4;
+    if !(in_bin || in_app) {
         return None;
     }
     Some(
@@ -44,8 +58,7 @@ fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
             .parent()?
             .join("opt")
             .join(formula_dir.file_name()?)
-            .join("bin")
-            .join(name),
+            .join(rest),
     )
 }
 
@@ -175,6 +188,8 @@ pub fn launchd_plist(exe: &Path, config: Option<&Path>, path: &str, log: &Path) 
 <dict>
   <key>Label</key>
   <string>{LABEL}</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <string>{BUNDLE_ID}</string>
   <key>ProgramArguments</key>
   <array>
 {args}  </array>
@@ -482,6 +497,20 @@ mod tests {
         );
         assert_eq!(
             homebrew_opt(Path::new("/home/me/.local/bin/pitupitu")),
+            None
+        );
+        assert_eq!(
+            homebrew_opt(Path::new(
+                "/opt/homebrew/Cellar/pitupitu/0.10.0/pitupitu.app/Contents/MacOS/pitupitu"
+            )),
+            Some(PathBuf::from(
+                "/opt/homebrew/opt/pitupitu/pitupitu.app/Contents/MacOS/pitupitu"
+            ))
+        );
+        assert_eq!(
+            homebrew_opt(Path::new(
+                "/opt/homebrew/Cellar/pitupitu/0.10.0/libexec/x/pitupitu"
+            )),
             None
         );
     }

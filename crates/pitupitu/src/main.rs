@@ -13,8 +13,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
 use pitupitu::{
-    config, device, herdr_box, home, inventory, link, list, service, sessions, settings, skill,
-    update,
+    config, device, herdr_box, home, inventory, link, list, mac_folders, service, sessions,
+    settings, skill, update,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
@@ -1149,6 +1149,7 @@ fn done(settings: &Value, as_json: bool, what: &str) {
 }
 
 async fn connect(cfg: &Config) -> Result<()> {
+    mac_folders::answer_if_asked(&cfg.path);
     // The skill as this version has it, for the agents' own copies; an
     // update restarts the service, so this is also how one reaches them.
     match skill::sync(&config::home_dir(), skill::Mode::Refresh) {
@@ -1381,12 +1382,18 @@ async fn setup(
     if no_service {
         eprintln!("  to connect this machine, run: pitupitu connect (and keep it open)");
     } else {
+        // macOS asks before pitupitu's agents open these folders: asked
+        // now, by the service as it starts, while someone is here to answer.
+        let ask_folders = cfg!(target_os = "macos") && mac_folders::request(path).is_ok();
         let installed = service::install(path)?;
         eprintln!(
             "  pitupitu is running now and starts by itself when you log in ({})",
             installed.kind
         );
         eprintln!("  to read its log: {}", installed.logs);
+        if ask_folders {
+            setup_mac_folders(path);
+        }
     }
     // Another cloud (a local gateway) has its own site, which the box does not know.
     if cfg.cloud_url == config::DEFAULT_CLOUD_URL {
@@ -1497,6 +1504,30 @@ async fn setup_herdr() {
         }
     }
     eprintln!("  to watch your agents on this machine as your phone sees them, run: herdr");
+}
+
+/// Waits for the service to have opened the folders macOS guards, which
+/// is when the Mac asks the person, and says what was allowed.
+fn setup_mac_folders(path: &std::path::Path) {
+    eprintln!();
+    eprintln!(
+        "  your Mac may now ask whether pitupitu can open your Desktop, Documents, Downloads \
+         and iCloud Drive; click Allow, so agents you start from your phone can work there \
+         as they do in your terminal"
+    );
+    let limit = if std::io::stdin().is_terminal() {
+        std::time::Duration::from_secs(120)
+    } else {
+        std::time::Duration::from_secs(15)
+    };
+    match mac_folders::wait(path, limit) {
+        Some(found) if found.is_empty() => {}
+        Some(found) => eprintln!("  folders: {}", mac_folders::summary(&found)),
+        None => eprintln!(
+            "  no answer yet; if your Mac asks later, click Allow (to change it: {})",
+            mac_folders::SETTINGS
+        ),
+    }
 }
 
 /// On Linux, user services stop at logout unless lingering is on:
@@ -1877,6 +1908,15 @@ async fn status(cfg: &Config) -> Result<()> {
     let recent = inventory::recent(&config::home_dir());
     println!("recent project folders: {}", recent.len());
     println!("service: {}", service::status());
+    if cfg!(target_os = "macos") {
+        match mac_folders::last(&cfg.path) {
+            Some(found) if !found.is_empty() => {
+                println!("folders: {}", mac_folders::summary(&found))
+            }
+            Some(_) => {}
+            None => println!("folders: not asked yet (`pitupitu setup` asks)"),
+        }
+    }
     match newer_box {
         Some(v) => println!(
             "version: {} (newer release {v}: `pitupitu update`)",

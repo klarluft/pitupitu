@@ -10,10 +10,12 @@ pub mod home;
 pub mod inventory;
 pub mod link;
 pub mod list;
+pub mod mac_folders;
 pub mod service;
 pub mod sessions;
 pub mod settings;
 pub mod skill;
+pub mod terminal_env;
 #[cfg(test)]
 pub mod testhost;
 pub mod update;
