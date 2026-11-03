@@ -1150,6 +1150,7 @@ fn done(settings: &Value, as_json: bool, what: &str) {
 
 async fn connect(cfg: &Config) -> Result<()> {
     mac_folders::answer_if_asked(&cfg.path);
+    service::restart_when_replaced();
     // The skill as this version has it, for the agents' own copies; an
     // update restarts the service, so this is also how one reaches them.
     match skill::sync(&config::home_dir(), skill::Mode::Refresh) {
