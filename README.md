@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock Claude Code and Codex by voice, from your phone or any browser.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from your phone or any browser.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
 
@@ -62,7 +62,7 @@ curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/
 pitupitu setup                                  # sign in with a code, pick a folder, start the service
 ```
 
-Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
+Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
 
 ## How it works
 
