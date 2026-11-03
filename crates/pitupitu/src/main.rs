@@ -1170,7 +1170,7 @@ async fn connect(cfg: &Config) -> Result<()> {
     match herdr_box::status(&herdr).await {
         Some(s) => tracing::info!(version = %s.version, running = s.running, "herdr"),
         None => tracing::warn!(
-            "herdr is not installed: pitupitu runs your agents in herdr; `pitupitu setup` installs it"
+            "herdr is not installed: pitupitu runs your agents in herdr's terminal app (Herdr TUI); `pitupitu setup` installs it"
         ),
     }
     let available = inventory::available().await;
@@ -1487,8 +1487,8 @@ async fn setup_herdr() {
         Some(b) => b,
         None => {
             eprintln!(
-                "  pitupitu runs your coding agents inside herdr, a small program that keeps \
-                 them running; installing it"
+                "  pitupitu runs your coding agents inside herdr's terminal app (Herdr TUI), a \
+                 small program that keeps them running; installing it"
             );
             match herdr_box::install() {
                 Ok(b) => {
@@ -1497,7 +1497,10 @@ async fn setup_herdr() {
                 }
                 Err(e) => {
                     eprintln!("  herdr could not be installed ({e:#})");
-                    eprintln!("  install it from https://herdr.dev, then run pitupitu setup again");
+                    eprintln!(
+                        "  install Herdr TUI from https://herdr.dev/tui (the desktop app is a \
+                         different program), then run pitupitu setup again"
+                    );
                     return;
                 }
             }

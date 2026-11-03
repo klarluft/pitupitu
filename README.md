@@ -34,7 +34,7 @@
 
 You say what you want done and where. pitupitu starts the agent session on that machine, keeps an eye on it, answers what it can, and tells you when it is done or needs you. In the car, on a walk, at the desk: the same sessions, from your phone or any browser.
 
-pitupitu runs your agents in [herdr](https://herdr.dev), a terminal workspace manager for coding agents. Open `herdr` on that machine and you see exactly what your phone sees: the same sessions, live, to watch or type into at the desk. If herdr is not installed, pitupitu installs it.
+pitupitu runs your agents in [Herdr TUI](https://herdr.dev/tui), herdr's terminal app: a terminal workspace manager for coding agents, the `herdr` command. Open `herdr` on that machine and you see exactly what your phone sees: the same sessions, live, to watch or type into at the desk. If it is not installed, pitupitu installs it. The Herdr desktop app is a separate program on its own runtime: pitupitu does not use it, and sessions pitupitu starts do not appear in it.
 
 This repository is the part that runs on each of your machines: a small Rust agent that links the machine to pitupitu cloud over one outbound WebSocket. The conversation, the voice and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
 
@@ -101,7 +101,7 @@ cargo install --git https://github.com/klarluft/pitupitu pitupitu
 
 Release binaries are built for Linux (x86_64, arm64, static musl) and macOS (Intel, Apple silicon) and come with SHA-256 checksums on the [releases page](https://github.com/klarluft/pitupitu/releases).
 
-The install script and `pitupitu setup` install [herdr](https://herdr.dev) with its own installer when it is not on your `PATH`. A herdr you installed with Homebrew, mise or Nix is used as it is. You need `claude` and/or `codex` (or another agent herdr knows) installed and signed in.
+The install script and `pitupitu setup` install [Herdr TUI](https://herdr.dev/tui) (the `herdr` command, not the desktop app) with its own installer when it is not on your `PATH`. A herdr you installed with Homebrew, mise or Nix is used as it is. You need `claude` and/or `codex` (or another agent herdr knows) installed and signed in.
 
 ## Set up
 
@@ -116,7 +116,7 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 3. **Your agents can change pitupitu's settings** (asked once, yes by default): installs a skill that teaches your agents how (in their own skill folders: Claude Code's, Codex's, Kiro CLI's, and `~/.agents/skills`, which OpenCode, Kilo Code, pi, Qwen Code and Cline read), so you can ask your own agent to do it. pitupitu keeps its copies up to date as it updates.
 4. **Which agent to use** (asked only when the machine has more than one coding agent and your account has no default yet; none is suggested, and Enter leaves it for later): the one pitupitu starts when you don't say which. It is saved for your account, so other machines don't ask again; change it any time with `pitupitu agent <name>` (`claude`, `codex`, `opencode`, …, or `auto`). Without one, pitupitu asks the first time it matters.
 5. **History** (not asked, on by default): setup says in one line that pitupitu keeps track of your projects by reading what your agents did on this machine, and where to switch it off. See [History](#history).
-6. **herdr**, the small program your agents run inside: installed if missing (said in one line, not asked). Then, for every agent it finds that herdr has an integration for, their sessions are set to come back after herdr restarts (`herdr integration install claude`, `codex`, `opencode`, `kilo`, `pi`, `qwen`, …).
+6. **herdr** (Herdr TUI), the small program your agents run inside: installed if missing (said in one line, not asked). Then, for every agent it finds that herdr has an integration for, their sessions are set to come back after herdr restarts (`herdr integration install claude`, `codex`, `opencode`, `kilo`, `pi`, `qwen`, …).
 7. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
 8. **Your folders, on macOS**: macOS asks before a program opens your Desktop, Documents, Downloads or iCloud Drive, and agents running in a herdr that pitupitu started are asked about as pitupitu (in a herdr you opened from your terminal, as your terminal app). So that this comes up now, while you are at the Mac, and not later while you are away with only your phone, the service opens each folder once as it starts: click Allow. Release builds are signed, so the answer stays through updates. `pitupitu status` shows what was allowed; to change it: System Settings › Privacy & Security › Files and Folders › pitupitu.
 
