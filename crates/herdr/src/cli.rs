@@ -549,8 +549,14 @@ impl AgentHost for HerdrCli {
         match started {
             Ok(_) => {}
             Err(e) if e.code() == Some("agent_not_ready") => {
-                // The name is registered; the agent is sitting on a dialog.
-                let answered = if opts.accept_trust_prompt {
+                // The name is registered; the agent is sitting on a dialog,
+                // or on a first-run screen that Esc closes (an advert).
+                let screen = self.read(name, 40).await.unwrap_or_default();
+                let answered = if let Some(keys) = crate::detect::dismiss_keys(&screen) {
+                    debug!(agent = name, "closing a first-run screen");
+                    self.send_keys(name, &keys).await?;
+                    true
+                } else if opts.accept_trust_prompt {
                     self.answer_trust_prompt(name).await?
                 } else {
                     false
@@ -566,9 +572,19 @@ impl AgentHost for HerdrCli {
             Err(e) => return Err(e),
         }
         let deadline = std::time::Instant::now() + settle;
-        let info = self
+        let mut info = self
             .wait(name, &[AgentStatus::Idle, AgentStatus::Done], settle)
             .await?;
+        if !info.agent_status.is_ready() {
+            let screen = self.read(name, 40).await.unwrap_or_default();
+            if let Some(keys) = crate::detect::dismiss_keys(&screen) {
+                debug!(agent = name, "closing a first-run screen");
+                self.send_keys(name, &keys).await?;
+                info = self
+                    .wait(name, &[AgentStatus::Idle, AgentStatus::Done], settle)
+                    .await?;
+            }
+        }
         if !info.agent_status.is_ready() {
             let screen = self.read(name, 20).await.unwrap_or_default();
             warn!(agent = name, status = %info.agent_status, "agent not ready after start");

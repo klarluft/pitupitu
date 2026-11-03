@@ -4,12 +4,14 @@
 pub mod calls;
 pub mod config;
 pub mod device;
+pub mod harness;
 pub mod herdr_box;
 pub mod history;
 pub mod home;
 pub mod inventory;
 pub mod link;
 pub mod list;
+pub(crate) mod logs;
 pub mod mac_folders;
 pub mod service;
 pub mod sessions;

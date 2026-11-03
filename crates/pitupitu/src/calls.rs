@@ -259,7 +259,7 @@ pub async fn last_message(
     let info = host.agent(&a.agent).await?;
     let found = tokio::task::spawn_blocking(move || {
         let (path, agent) =
-            crate::history::find_log(&home, &info.agent, info.agent_session.as_ref())?;
+            crate::history::find_log(&home, &info.agent, info.agent_session.as_ref(), &info.cwd)?;
         crate::history::last_reply(&path, agent)
     })
     .await

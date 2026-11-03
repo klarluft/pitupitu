@@ -1,8 +1,10 @@
 //! The `pitupitu` skill: how the person's own agents install, link and
 //! configure pitupitu for them (`skill/SKILL.md`, the Agent Skills format).
 //! `pitupitu --skill` prints it; `pitupitu skill install` puts it where
-//! Claude Code and Codex look for skills, and [`sync`] keeps those copies in
-//! step with this binary.
+//! the agents look for skills (Claude Code's and Codex's own folders, Kiro
+//! CLI's, and `~/.agents/skills`, which OpenCode, Kilo Code, pi, Qwen Code
+//! and Cline read), and [`sync`] keeps those copies in step with this
+//! binary.
 //!
 //! A copy pitupitu wrote carries `managed-by: pitupitu` in its frontmatter's
 //! `metadata`, with the version that wrote it. Only such a copy is ever
@@ -36,8 +38,18 @@ const EARLIER: &[&str] = &[
     "ae3031e22902665f6c39ef273f945d36974c510f7a9f2c30db73bf07b82196b6",
 ];
 
-/// The agents that read user skills: their name and home folder.
-const AGENTS: &[(&str, &str)] = &[("Claude Code", ".claude"), ("Codex", ".codex")];
+/// The agents that read user skills: their name, the folder whose
+/// `skills/` they read, and other folders that show one of them is here.
+const AGENTS: &[(&str, &str, &[&str])] = &[
+    ("Claude Code", ".claude", &[]),
+    ("Codex", ".codex", &[]),
+    ("Kiro CLI", ".kiro", &[]),
+    (
+        "OpenCode, Kilo Code, pi, Qwen Code and Cline",
+        ".agents",
+        &[".config/opencode", ".config/kilo", ".pi", ".qwen", ".cline"],
+    ),
+];
 
 /// The skill as this version prints and installs it.
 pub fn text() -> String {
@@ -76,7 +88,7 @@ pub enum State {
 pub struct Copy {
     pub agent: &'static str,
     pub path: PathBuf,
-    /// Whether the agent's own folder (`~/.claude`, `~/.codex`) exists.
+    /// Whether the agent's own folder (`~/.claude`, `~/.codex`, …) exists.
     pub agent_installed: bool,
     pub state: State,
 }
@@ -95,7 +107,7 @@ pub fn status(home: &Path) -> Vec<Copy> {
     let want = text();
     AGENTS
         .iter()
-        .map(|(agent, dir)| {
+        .map(|(agent, dir, markers)| {
             let path = home.join(dir).join("skills/pitupitu/SKILL.md");
             let state = match std::fs::read_to_string(&path) {
                 Err(_) if !path.exists() => State::Missing,
@@ -106,7 +118,8 @@ pub fn status(home: &Path) -> Vec<Copy> {
             };
             Copy {
                 agent,
-                agent_installed: home.join(dir).is_dir(),
+                agent_installed: home.join(dir).is_dir()
+                    || markers.iter().any(|m| home.join(m).is_dir()),
                 path,
                 state,
             }
@@ -229,8 +242,19 @@ mod tests {
         assert_eq!(done, [Outcome::Written(copy_at(home, ".claude"))]);
         assert!(!home.join(".codex").exists());
 
+        // A harness that reads ~/.agents/skills is found by its own folder.
+        std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
+        let done = sync(home, Mode::Install).unwrap();
+        assert_eq!(done, [Outcome::Written(copy_at(home, ".agents"))]);
+
         let done = sync(home, Mode::Everywhere).unwrap();
-        assert_eq!(done, [Outcome::Written(copy_at(home, ".codex"))]);
+        assert_eq!(
+            done,
+            [
+                Outcome::Written(copy_at(home, ".codex")),
+                Outcome::Written(copy_at(home, ".kiro"))
+            ]
+        );
         for c in status(home) {
             assert_eq!(c.state, State::Current);
             assert_eq!(std::fs::read_to_string(c.path).unwrap(), text());
@@ -256,7 +280,15 @@ mod tests {
         let own = "---\nname: pitupitu\ndescription: mine\n---\n\nmy notes\n";
         std::fs::write(&codex, own).unwrap();
         let states: Vec<_> = status(home).iter().map(|c| c.state).collect();
-        assert_eq!(states, [State::Outdated, State::Unmanaged]);
+        assert_eq!(
+            states,
+            [
+                State::Outdated,
+                State::Unmanaged,
+                State::Current,
+                State::Current
+            ]
+        );
 
         let done = sync(home, Mode::Refresh).unwrap();
         assert_eq!(

@@ -22,9 +22,62 @@ pub const HISTORY_SAYS: &str = "pitupitu keeps track of your projects by reading
 /// Said by `pitupitu box history off`.
 pub const HISTORY_OFF_SAYS: &str = "pitupitu will no longer read what your agents did on this \
     machine; what it already stored is deleted from the app page, What pitupitu knows.";
-/// The agents a default can name; `auto` clears it.
-pub const AGENTS: &[&str] = &["claude", "codex", "auto"];
-pub const AGENT_KINDS: &[&str] = &["claude", "codex"];
+/// The agents a default or a model can name: every harness this release
+/// knows (`harness::built_in`).
+pub const AGENT_KINDS: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "agy",
+    "opencode",
+    "kilo",
+    "pi",
+    "qwen",
+    "cline",
+    "kiro",
+    "cursor",
+    "copilot",
+    "droid",
+    "amp",
+    "grok",
+    "hermes",
+    "kimi",
+    "letta",
+    "qodercli",
+    "devin",
+    "omp",
+    "mastracode",
+    "maki",
+    "muse",
+];
+/// The same, and `auto`, which clears the default.
+pub const AGENTS: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "agy",
+    "opencode",
+    "kilo",
+    "pi",
+    "qwen",
+    "cline",
+    "kiro",
+    "cursor",
+    "copilot",
+    "droid",
+    "amp",
+    "grok",
+    "hermes",
+    "kimi",
+    "letta",
+    "qodercli",
+    "devin",
+    "omp",
+    "mastracode",
+    "maki",
+    "muse",
+    "auto",
+];
 
 /// `auto` is no default at all.
 pub fn agent_or_null(name: &str) -> Value {
@@ -36,24 +89,32 @@ pub fn agent_or_null(name: &str) -> Value {
 }
 
 /// Whether `pitupitu setup` asks which agent to use by default: only a
-/// person at a terminal, only with both Claude Code and Codex installed
+/// person at a terminal, only with two or more agents installed
 /// (`installed` holds the agent CLIs found), and only while the account
 /// has no default (`default_agent` from `GET /v1/settings`).
 pub fn ask_default_agent(terminal: bool, installed: &[&str], default_agent: &Value) -> bool {
-    terminal
-        && installed.contains(&"claude")
-        && installed.contains(&"codex")
-        && default_agent.is_null()
+    terminal && installed.len() >= 2 && default_agent.is_null()
 }
 
-/// An answer to setup's agent question: Enter is Claude Code; `1`/`2` or
-/// the name pick one; anything else is `None` (asked again).
-pub fn default_agent_answer(answer: &str) -> Option<&'static str> {
-    match answer.trim().to_lowercase().as_str() {
-        "" | "1" | "claude" | "claude code" => Some("claude"),
-        "2" | "codex" => Some("codex"),
-        _ => None,
+/// An answer to setup's agent question over `options` (kind, name), in
+/// the order shown: a number or a name picks one (`Some(Some(kind))`),
+/// Enter leaves it unset (`Some(None)`: pitupitu asks when it matters);
+/// anything else is `None` (asked again). No agent comes first.
+pub fn default_agent_answer<'a>(
+    answer: &str,
+    options: &[(&'a str, String)],
+) -> Option<Option<&'a str>> {
+    let a = answer.trim().to_lowercase();
+    if a.is_empty() {
+        return Some(None);
     }
+    if let Ok(n) = a.parse::<usize>() {
+        return options.get(n.checked_sub(1)?).map(|(k, _)| Some(*k));
+    }
+    options
+        .iter()
+        .find(|(k, name)| a == *k || a == name.to_lowercase())
+        .map(|(k, _)| Some(*k))
 }
 
 fn endpoint(cfg: &Config) -> Result<(String, String)> {
@@ -313,18 +374,26 @@ mod tests {
         assert!(!ask_default_agent(false, &both, &Value::Null));
         assert!(!ask_default_agent(true, &both, &json!("codex")));
         assert!(!ask_default_agent(true, &["claude"], &Value::Null));
-        assert!(!ask_default_agent(true, &["codex", "gemini"], &Value::Null));
+        assert!(ask_default_agent(true, &["kiro", "opencode"], &Value::Null));
         assert!(!ask_default_agent(true, &[], &Value::Null));
     }
 
     #[test]
     fn default_agent_answers() {
-        assert_eq!(default_agent_answer(""), Some("claude"));
-        assert_eq!(default_agent_answer(" 1 "), Some("claude"));
-        assert_eq!(default_agent_answer("Claude Code"), Some("claude"));
-        assert_eq!(default_agent_answer("2"), Some("codex"));
-        assert_eq!(default_agent_answer("Codex"), Some("codex"));
-        assert_eq!(default_agent_answer("3"), None);
-        assert_eq!(default_agent_answer("gemini"), None);
+        let options = [
+            ("claude", "Claude Code".to_string()),
+            ("kiro", "Kiro CLI".to_string()),
+        ];
+        assert_eq!(default_agent_answer("", &options), Some(None));
+        assert_eq!(default_agent_answer(" 1 ", &options), Some(Some("claude")));
+        assert_eq!(default_agent_answer("2", &options), Some(Some("kiro")));
+        assert_eq!(
+            default_agent_answer("Kiro CLI", &options),
+            Some(Some("kiro"))
+        );
+        assert_eq!(default_agent_answer("kiro", &options), Some(Some("kiro")));
+        assert_eq!(default_agent_answer("3", &options), None);
+        assert_eq!(default_agent_answer("0", &options), None);
+        assert_eq!(default_agent_answer("gemini", &options), None);
     }
 }

@@ -5,8 +5,9 @@
 //! which in its `settings` note and the box keeps nothing about the setting
 //! itself.
 //!
-//! Read: Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's
-//! `~/.codex/sessions/YYYY/MM/DD/*.jsonl`, the same files `recent` lists.
+//! Read: the agents' own session logs, the ones `logs.rs` lists and
+//! `recent` looks at: Claude Code's and Codex's here, Kiro CLI's, pi's,
+//! Qwen Code's, Cline's, OpenCode's and Kilo Code's in `harnesses.rs`.
 //! Sent, per session: the folder, the repository it is in, when it ran, a
 //! title, and its turns: what the person typed, what the agent answered,
 //! and for each tool call its name and one target (a file path, the start
@@ -14,8 +15,10 @@
 //! the branch's recent commits with how many files each touched.
 //!
 //! Never read or sent: tool results and command output, file contents (an
-//! edit's text, a written file, a patch's body), subagent transcripts,
-//! anything else under `~/.claude` or `~/.codex`, credentials of any kind.
+//! edit's text, a written file, a patch's body), thinking, subagent
+//! transcripts, anything else in the agents' folders (their settings,
+//! process registries, the other tables of a database), credentials of
+//! any kind.
 //! Everything sent is cut short and anything that looks like a secret
 //! becomes `[redacted]` first.
 //!
@@ -28,7 +31,7 @@
 //! last sent, so a restart does not send everything again. That file is
 //! removed when history is switched off.
 
-use crate::inventory;
+use crate::{inventory, logs};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -39,6 +42,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info};
+
+mod harnesses;
 
 /// How often the logs are looked at.
 pub const POLL: Duration = Duration::from_secs(10);
@@ -260,7 +265,18 @@ fn title_of(s: &str) -> Option<String> {
 // Tool targets.
 
 /// Tools whose target is the file they work on.
-const FILE_TOOLS: &[&str] = &["Edit", "Write", "Read", "MultiEdit", "NotebookEdit"];
+const FILE_TOOLS: &[&str] = &[
+    "Edit",
+    "Write",
+    "Read",
+    "MultiEdit",
+    "NotebookEdit",
+    // pi's, OpenCode's, Cline's.
+    "edit",
+    "write",
+    "read",
+    "editor",
+];
 /// Tools whose target is the command they run.
 const SHELL_TOOLS: &[&str] = &[
     "Bash",
@@ -270,6 +286,9 @@ const SHELL_TOOLS: &[&str] = &[
     "local_shell",
     "shell_command",
     "container.exec",
+    "bash",
+    "run_shell_command",
+    "execute_bash",
 ];
 /// Arguments that hold file contents or edits: never a target.
 const CONTENT_ARGS: &[&str] = &[
@@ -284,6 +303,16 @@ const CONTENT_ARGS: &[&str] = &[
     "body",
     "data",
     "file_text",
+    "text",
+    "new_text",
+    "old_text",
+    "newText",
+    "oldText",
+    "newString",
+    "oldString",
+    "new_str",
+    "old_str",
+    "diff",
 ];
 
 /// A command as one string: an argv's last element after `-c`/`-lc`
@@ -307,7 +336,7 @@ fn command_text(v: &Value) -> Option<String> {
 /// The one thing a tool call is about: the file for file tools, the start
 /// of the command for shell tools, else its first string argument.
 pub fn target(name: &str, input: &Value) -> Option<String> {
-    let path = ["file_path", "notebook_path"]
+    let path = ["file_path", "filePath", "notebook_path"]
         .iter()
         .chain(if FILE_TOOLS.contains(&name) {
             ["path"].iter()
@@ -554,6 +583,21 @@ impl Parsed {
         self.push(at, Kind::Tool { name, target });
     }
 
+    /// Read the log at `path`, on from where it was left for the logs
+    /// that are only appended to, whole for the others.
+    fn load(&mut self, path: &Path) -> std::io::Result<()> {
+        match self.agent {
+            "cline" => self.read_cline(path),
+            "opencode" | "kilo" => self.read_db(path),
+            "kiro" => {
+                self.read(path)?;
+                self.kiro_session(path);
+                Ok(())
+            }
+            _ => self.read(path),
+        }
+    }
+
     fn line(&mut self, line: &str) {
         // Most lines of a Claude Code log are neither turns nor the title;
         // they are skipped before they are parsed.
@@ -567,10 +611,13 @@ impl Parsed {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return;
         };
-        if self.agent == "claude" {
-            self.claude(&v)
-        } else {
-            self.codex(&v)
+        match self.agent {
+            "claude" => self.claude(&v),
+            "codex" => self.codex(&v),
+            "kiro" => self.kiro(&v),
+            "pi" => self.pi(&v),
+            "qwen" => self.qwen(&v),
+            _ => {}
         }
     }
 
@@ -967,16 +1014,13 @@ impl Reader {
 
     /// The logs of the last 7 days, at most the newest 300, oldest first.
     fn logs(&self, now: u64) -> Vec<Log> {
-        let mut logs: Vec<Log> = inventory::session_files(&self.home)
+        let mut logs: Vec<Log> = logs::list(&self.home)
             .into_iter()
-            .filter_map(|(m, path, agent)| {
-                let size = path.metadata().ok()?.len();
-                Some(Log {
-                    path,
-                    agent,
-                    size,
-                    mtime: unix(m),
-                })
+            .map(|l| Log {
+                path: l.path,
+                agent: l.agent,
+                size: l.size,
+                mtime: unix(l.modified),
             })
             .filter(|l| now.saturating_sub(l.mtime / 1000) <= WINDOW)
             .collect();
@@ -1024,12 +1068,15 @@ impl Reader {
     /// The record of one session log, read on from where it was left.
     /// `None` for a log with no turns or no folder.
     fn session(&mut self, log: &Log, now: u64) -> Option<Session> {
+        // Logs only appended to are read on from where they were left;
+        // Cline's (rewritten) and a database's are read whole.
+        let appended = !matches!(log.agent, "cline" | "opencode" | "kilo");
         let mut p = self
             .open
             .remove(&log.path)
-            .filter(|p| p.offset <= log.size)
+            .filter(|p| appended && p.offset <= log.size)
             .unwrap_or_else(|| Parsed::new(log.agent));
-        if let Err(e) = p.read(&log.path) {
+        if let Err(e) = p.load(&log.path) {
             debug!("reading a session log: {e}");
         }
         let live = log.live(now);
@@ -1070,7 +1117,7 @@ impl Reader {
         let mut first = p.first_you;
         cap(&mut turns, &mut first, RECORD_MAX.saturating_sub(base));
         record.turns = turns;
-        if live {
+        if live && appended {
             self.open.insert(log.path.clone(), p);
         }
         if let Some(g) = &record.git {
@@ -1358,7 +1405,7 @@ fn head_and_tail(s: &str, max: usize) -> (String, bool) {
 }
 
 /// A session id that can be part of a file name: letters, digits, `-`
-/// and `_`, as Claude Code's and Codex's ids are.
+/// and `_`, as every agent's ids are.
 fn safe_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -1367,61 +1414,101 @@ fn safe_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// The log of the session herdr reports in a pane, under `home`: Claude
-/// Code's `~/.claude/projects/*/<id>.jsonl`, Codex's
-/// `~/.codex/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`. A session given
-/// by path counts only when it is one of those files. Nothing else is
-/// looked at.
+/// The agents whose logs the box reads, by herdr's names for them.
+const READ: &[&str] = &[
+    "claude", "codex", "kiro", "pi", "qwen", "cline", "opencode", "kilo",
+];
+
+/// For an agent herdr reports no session for, a log of that agent in the
+/// pane's folder written this recently (10 minutes) may be the pane's.
+const GUESS_RECENT: u64 = 600;
+
+/// Whether `log` is the log of session `id` of its agent.
+fn is_session(log: &logs::LogRef, id: &str) -> bool {
+    let name = log
+        .path
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let stem = name.split_once('.').map_or(name.as_ref(), |(s, _)| s);
+    match log.agent {
+        "claude" | "qwen" => stem == id,
+        "codex" => stem.ends_with(&format!("-{id}")),
+        "pi" => stem.ends_with(&format!("_{id}")),
+        "cline" => name == format!("{id}.messages.json"),
+        "kiro" => log
+            .path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|d| {
+                let d = d.to_string_lossy();
+                d == id || d.strip_prefix("sess_") == Some(id)
+            }),
+        "opencode" | "kilo" => logs::split_db_path(&log.path).is_some_and(|(_, s)| s == id),
+        _ => false,
+    }
+}
+
+/// The log of the session in a pane, under `home`. With the session herdr
+/// reports: by `id`, the agent's log of that session (Claude Code's
+/// `~/.claude/projects/*/<id>.jsonl`, Codex's `rollout-…-<id>.jsonl`, and
+/// so on for each agent `logs.rs` lists); by `path`, only when the path is
+/// one of the agent's own logs. Without one, for an agent other than
+/// Claude Code and Codex (herdr has no integration for Kiro and Cline, and
+/// the others' may not be installed): the log of that agent in `cwd`, the
+/// pane's folder, written in the last 10 minutes, but only when exactly
+/// one fits; a wrong log is worse than none. Nothing else is looked at.
 pub fn find_log(
     home: &Path,
     agent: &str,
     session: Option<&herdr::AgentSession>,
+    cwd: &Path,
 ) -> Result<(PathBuf, &'static str), NoReply> {
-    let agent = match agent {
-        "claude" => "claude",
-        "codex" => "codex",
-        other => {
-            return Err(NoReply::NoLog(format!(
-                "the box does not read {} logs",
-                if other.is_empty() {
-                    "this agent's"
-                } else {
-                    other
-                }
-            )))
-        }
+    let Some(agent) = READ.iter().copied().find(|a| *a == agent) else {
+        return Err(NoReply::NoLog(format!(
+            "the box does not read {} logs",
+            if agent.is_empty() {
+                "this agent's"
+            } else {
+                agent
+            }
+        )));
     };
+    let files = || logs::list(home).into_iter().filter(|l| l.agent == agent);
     let Some(session) = session else {
-        return Err(NoReply::NoLog(
-            "herdr reports no session for this pane (its integration for the agent may be missing: `pitupitu setup`)".into(),
-        ));
-    };
-    let files = || {
-        inventory::session_files(home)
-            .into_iter()
-            .filter(|(_, _, a)| *a == agent)
-            .map(|(m, p, _)| (m, p))
+        if matches!(agent, "claude" | "codex") {
+            return Err(NoReply::NoLog(
+                "herdr reports no session for this pane (its integration for the agent may be missing: `pitupitu setup`)".into(),
+            ));
+        }
+        let now = SystemTime::now();
+        let fits: Vec<PathBuf> = files()
+            .filter(|l| {
+                now.duration_since(l.modified)
+                    .map_or(true, |d| d.as_secs() < GUESS_RECENT)
+            })
+            .filter(|l| logs::cwd_of(l).as_deref() == Some(cwd))
+            .map(|l| l.path)
+            .collect();
+        return match fits.as_slice() {
+            [one] => Ok((one.clone(), agent)),
+            [] => Err(NoReply::NoLog(format!(
+                "herdr reports no session for this pane, and no {agent} log in its folder was written in the last 10 minutes"
+            ))),
+            _ => Err(NoReply::NoLog(format!(
+                "herdr reports no session for this pane, and several {agent} logs in its folder were written in the last 10 minutes"
+            ))),
+        };
     };
     let found = match session.kind.as_str() {
-        "id" if safe_id(&session.value) => {
-            let v = &session.value;
-            files()
-                .filter(|(_, p)| {
-                    let stem = p
-                        .file_stem()
-                        .map(|s| s.to_string_lossy())
-                        .unwrap_or_default();
-                    match agent {
-                        "claude" => stem == v.as_str(),
-                        _ => stem.ends_with(&format!("-{v}")),
-                    }
-                })
-                .max_by_key(|(m, _)| *m)
-                .map(|(_, p)| p)
-        }
-        "path" => {
+        "id" if safe_id(&session.value) => files()
+            .filter(|l| is_session(l, &session.value))
+            .max_by_key(|l| l.modified)
+            .map(|l| l.path),
+        // A database session is not a file of its own.
+        "path" if !matches!(agent, "opencode" | "kilo") => {
             let want = Path::new(&session.value);
-            files().map(|(_, p)| p).find(|p| p == want)
+            files().map(|l| l.path).find(|p| p == want)
         }
         _ => None,
     };
@@ -1437,7 +1524,7 @@ pub fn find_log(
 pub fn last_reply(path: &Path, agent: &'static str) -> Result<Reply, NoReply> {
     let mut p = Parsed::new(agent);
     p.last = Some(Last::default());
-    p.read(path)
+    p.load(path)
         .map_err(|e| NoReply::NoLog(format!("reading the log: {}", e.kind())))?;
     p.last
         .take()
@@ -1644,18 +1731,29 @@ mod tests {
             value: value.into(),
         };
         assert_eq!(
-            find_log(home, "claude", Some(&s("claude", "id", "c-42"))),
+            find_log(
+                home,
+                "claude",
+                Some(&s("claude", "id", "c-42")),
+                Path::new("/work/garden")
+            ),
             Ok((claude.clone(), "claude"))
         );
         assert_eq!(
-            find_log(home, "codex", Some(&s("codex", "id", "0199-abc"))),
+            find_log(
+                home,
+                "codex",
+                Some(&s("codex", "id", "0199-abc")),
+                Path::new("/work")
+            ),
             Ok((codex, "codex"))
         );
         assert_eq!(
             find_log(
                 home,
                 "claude",
-                Some(&s("claude", "path", claude.to_str().unwrap()))
+                Some(&s("claude", "path", claude.to_str().unwrap())),
+                Path::new("/work/garden"),
             ),
             Ok((claude, "claude"))
         );
@@ -1672,7 +1770,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    find_log(home, agent, session.as_ref()),
+                    find_log(home, agent, session.as_ref(), Path::new("/work/garden")),
                     Err(NoReply::NoLog(_))
                 ),
                 "{agent} {session:?}"

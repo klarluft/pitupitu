@@ -3,33 +3,48 @@
 //! kinds herdr can start, which agent CLIs are on `PATH`, and the project
 //! folders agents worked in recently.
 //!
-//! Recent folders come from the agents' own session history: Claude Code's
-//! `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`.
-//! Only the working directory of each session and when it was last written
-//! are read and sent; nothing else from those files leaves the box. Their
-//! credentials are never read: whether an agent is logged in is not
-//! checked at all.
+//! Recent folders come from the agents' own session history, the logs
+//! `logs.rs` lists (Claude Code, Codex, Kiro, pi, Qwen Code, Cline,
+//! OpenCode, Kilo Code). Only the working directory of each session and
+//! when it was last written are read and sent; nothing else from those
+//! files leaves the box. Their credentials are never read: whether an
+//! agent is logged in is not checked at all.
 
 use crate::herdr_box::HerdrInfo;
+use crate::logs;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// Agent CLIs looked for on `PATH`.
-const KINDS: &[&str] = &["claude", "codex", "gemini", "agy", "opencode"];
 /// Recent folders sent, newest first.
 const RECENT_MAX: usize = 30;
 /// Session files looked at, newest first.
 const FILES_MAX: usize = 300;
-/// Lines of a session file read looking for its working directory.
-const LINES_MAX: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Available {
     pub kind: String,
     pub version: String,
+    /// The command herdr runs for the kind (`kiro-cli` for `kiro`).
+    pub command: String,
+    /// From the harness's lister; `None` when it cannot say.
+    pub signed_in: Option<bool>,
+    /// From the harness's lister; `None` when not listed.
+    pub models: Option<Vec<crate::harness::Model>>,
+    pub models_at: Option<String>,
+    pub models_error: Option<String>,
+}
+
+/// `a` with what its lister last said.
+pub fn with_listed(mut a: Available) -> Available {
+    if let Some(l) = crate::harness::listed(&a.kind) {
+        a.signed_in = l.signed_in;
+        a.models = l.models;
+        a.models_at = l.at;
+        a.models_error = l.error;
+    }
+    a
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -55,39 +70,55 @@ pub struct Inventory {
     pub recent: Vec<Recent>,
 }
 
-/// The agent CLIs on `PATH`, each with what `--version` printed.
+/// The harnesses on `PATH` (every profile's command, `docs/box-link.md`,
+/// "Harnesses"), each with what `--version` printed and what its lister
+/// last said.
 pub async fn available() -> Vec<Available> {
-    let mut out = Vec::new();
-    for kind in KINDS {
-        let run = tokio::process::Command::new(kind)
+    let checks = crate::harness::profiles().into_iter().map(|p| async move {
+        if !crate::harness::command_ok(&p.command) {
+            return None;
+        }
+        let run = tokio::process::Command::new(&p.command)
             .arg("--version")
+            .env("NO_COLOR", "1")
             .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .output();
-        if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(5), run).await {
-            if o.status.success() {
+        match tokio::time::timeout(Duration::from_secs(5), run).await {
+            Ok(Ok(o)) if o.status.success() => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                out.push(Available {
-                    kind: kind.to_string(),
+                Some(with_listed(Available {
+                    kind: p.kind.clone(),
                     version: text.lines().next().unwrap_or("").trim().to_string(),
-                });
+                    command: p.command.clone(),
+                    signed_in: None,
+                    models: None,
+                    models_at: None,
+                    models_error: None,
+                }))
             }
+            _ => None,
         }
-    }
-    out
+    });
+    futures_util::future::join_all(checks)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Recent project folders from the agents' session history under `home`
 /// (the user's home directory), newest first, folders that still exist.
 pub fn recent(home: &Path) -> Vec<Recent> {
-    let mut files = session_files(home);
-    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    let mut files = logs::list(home);
+    files.sort_by_key(|f| std::cmp::Reverse(f.modified));
     files.truncate(FILES_MAX);
 
     let mut seen: HashMap<PathBuf, ()> = HashMap::new();
     let mut out = Vec::new();
-    for (modified, file, agent) in files {
-        let Some(cwd) = session_cwd(&file) else {
+    for log in files {
+        let Some(cwd) = logs::cwd_of(&log) else {
             continue;
         };
         if seen.insert(cwd.clone(), ()).is_some() || !cwd.is_dir() {
@@ -95,86 +126,14 @@ pub fn recent(home: &Path) -> Vec<Recent> {
         }
         out.push(Recent {
             path: cwd,
-            agent: agent.to_string(),
-            at: rfc3339(modified),
+            agent: log.agent.to_string(),
+            at: rfc3339(log.modified),
         });
         if out.len() == RECENT_MAX {
             break;
         }
     }
     out
-}
-
-/// Every session file of both agents with when it was last written:
-/// Claude Code's `~/.claude/projects/*/*.jsonl` (one per session; the
-/// subagents' files one level further down are not among them) and
-/// Codex's `~/.codex/sessions/YYYY/MM/DD/*.jsonl`. Nothing is opened.
-pub(crate) fn session_files(home: &Path) -> Vec<(SystemTime, PathBuf, &'static str)> {
-    let mut files: Vec<(SystemTime, PathBuf, &str)> = Vec::new();
-    // Claude Code: one folder per project, one file per session.
-    if let Ok(projects) = std::fs::read_dir(home.join(".claude/projects")) {
-        for dir in projects.flatten() {
-            if let Ok(sessions) = std::fs::read_dir(dir.path()) {
-                for f in sessions.flatten() {
-                    push_jsonl(&mut files, f.path(), "claude");
-                }
-            }
-        }
-    }
-    // Codex: sessions/YYYY/MM/DD/rollout-….jsonl.
-    walk(&home.join(".codex/sessions"), 4, &mut |p| {
-        push_jsonl(&mut files, p, "codex")
-    });
-    files
-}
-
-fn push_jsonl(
-    files: &mut Vec<(SystemTime, PathBuf, &'static str)>,
-    p: PathBuf,
-    agent: &'static str,
-) {
-    if p.extension().is_some_and(|x| x == "jsonl") && p.is_file() {
-        if let Ok(m) = p.metadata().and_then(|m| m.modified()) {
-            files.push((m, p, agent));
-        }
-    }
-}
-
-fn walk(dir: &Path, depth: u32, f: &mut dyn FnMut(PathBuf)) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if depth > 0 {
-                walk(&p, depth - 1, f);
-            }
-        } else {
-            f(p);
-        }
-    }
-}
-
-/// The working directory a session file records: a top-level `cwd`
-/// (Claude Code) or `payload.cwd` (Codex's `session_meta`), in its first
-/// lines. Nothing else of the file is kept.
-fn session_cwd(file: &Path) -> Option<PathBuf> {
-    let reader = BufReader::new(std::fs::File::open(file).ok()?);
-    for line in reader.lines().take(LINES_MAX) {
-        let line = line.ok()?;
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        let cwd = v
-            .get("cwd")
-            .or_else(|| v.get("payload").and_then(|p| p.get("cwd")))
-            .and_then(|c| c.as_str());
-        if let Some(c) = cwd.filter(|c| c.starts_with('/')) {
-            return Some(PathBuf::from(c));
-        }
-    }
-    None
 }
 
 /// A time as `YYYY-MM-DDTHH:MM:SSZ`, without a date crate.
