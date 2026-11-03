@@ -47,12 +47,12 @@ esac
 # when it is missing. A failure is said, not fatal; setup tries again.
 herdr_dir="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
 if ! command -v herdr >/dev/null 2>&1 && [ ! -x "$herdr_dir/herdr" ]; then
-  echo "pitupitu runs your coding agents inside herdr, a small program that keeps them running; installing it"
+  echo "pitupitu runs your coding agents inside herdr's terminal app (Herdr TUI), a small program that keeps them running; installing it"
   if curl -fsSL https://herdr.dev/install.sh -o "$tmp/herdr-install.sh" &&
     sh "$tmp/herdr-install.sh"; then
     :
   else
-    echo "herdr could not be installed; pitupitu setup tries again (or see https://herdr.dev)" >&2
+    echo "herdr could not be installed; pitupitu setup tries again (or install Herdr TUI from https://herdr.dev/tui; the desktop app is a different program)" >&2
   fi
 fi
 
