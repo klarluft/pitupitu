@@ -54,6 +54,8 @@ const DROP: &[&str] = &[
     "WATCHDOG_PID",
     "WATCHDOG_USEC",
     "MAINPID",
+    // launchd
+    "XPC_SERVICE_NAME",
     // herdr, inside a pane
     "HERDR_ENV",
     "HERDR_PANE_ID",

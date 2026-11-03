@@ -339,10 +339,8 @@ pub fn restart() -> Result<bool> {
         if !launchd_file().exists() {
             return Ok(false);
         }
-        run(
-            "launchctl",
-            &["kickstart", "-k", &format!("gui/{}/{LABEL}", uid()?)],
-        )?;
+        let script = launchd_restart_script(&uid()?, &launchd_file());
+        run("/bin/sh", &["-c", &script])?;
         Ok(true)
     } else if cfg!(target_os = "linux") {
         if !systemd_file().exists() {
@@ -366,7 +364,128 @@ pub fn restart_soon() -> Result<bool> {
         run("systemctl", &["--user", "restart", "--no-block", UNIT])?;
         return Ok(true);
     }
+    if cfg!(target_os = "macos") {
+        if !launchd_file().exists() {
+            return Ok(false);
+        }
+        // In a process group of its own, which launchd leaves running
+        // (AbandonProcessGroup) when it stops this one.
+        let script = launchd_restart_script(&uid()?, &launchd_file());
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        cmd.spawn().context("running sh")?;
+        return Ok(true);
+    }
     restart()
+}
+
+/// Restarts the launchd agent on the binary now at its path. macOS
+/// refuses to start a login item whose code no longer matches what it
+/// recorded at login (after an update from an ad-hoc signed release, the
+/// launchd job says `OS_REASON_CODESIGNING`); when the restarted agent is
+/// not running within 10 s, it is registered again, which records the new
+/// code.
+fn launchd_restart_script(uid: &str, plist: &Path) -> String {
+    let service = format!("gui/{uid}/{LABEL}");
+    let plist = plist.display().to_string().replace('\'', r"'\''");
+    format!(
+        r#"s='{service}'
+launchctl kickstart -k "$s" || true
+i=0
+while [ $i -lt 20 ]; do
+  sleep 0.5
+  launchctl print "$s" 2>/dev/null | grep -q 'state = running' && exit 0
+  i=$((i+1))
+done
+launchctl bootout "$s" 2>/dev/null
+i=0
+while launchctl print "$s" >/dev/null 2>&1 && [ $i -lt 40 ]; do sleep 0.5; i=$((i+1)); done
+for t in 1 2 3 4 5; do
+  launchctl bootstrap 'gui/{uid}' '{plist}' && exit 0
+  sleep 1
+done
+exit 1
+"#
+    )
+}
+
+/// Whether this process is the box agent's service itself (not a
+/// `pitupitu connect` someone runs in a terminal, which may have inherited
+/// the service's variables): launchd names its job in `XPC_SERVICE_NAME`
+/// and is the parent; systemd puts the main process's id in
+/// `SYSTEMD_EXEC_PID`.
+pub fn is_service_process() -> bool {
+    #[cfg(unix)]
+    {
+        if cfg!(target_os = "macos") {
+            return std::env::var("XPC_SERVICE_NAME").is_ok_and(|n| n == LABEL)
+                && std::os::unix::process::parent_id() == 1;
+        }
+        if cfg!(target_os = "linux") {
+            return std::env::var("SYSTEMD_EXEC_PID")
+                .is_ok_and(|p| p == std::process::id().to_string())
+                && systemd_file().exists();
+        }
+    }
+    false
+}
+
+/// The running binary as found on disk now: its real path and, on Unix,
+/// the file it is (device and inode). A new install (`brew upgrade`,
+/// `install.sh`, another updater) changes one of them.
+fn binary_identity(exe: &Path) -> Option<(PathBuf, u64, u64)> {
+    let real = std::fs::canonicalize(exe).ok()?;
+    let meta = std::fs::metadata(&real).ok()?;
+    #[cfg(unix)]
+    let (dev, ino) = {
+        use std::os::unix::fs::MetadataExt;
+        (meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let (dev, ino) = (0, meta.len());
+    Some((real, dev, ino))
+}
+
+/// How often the service looks whether a new binary was installed.
+const BINARY_CHECK: Duration = Duration::from_secs(30);
+
+/// For the service: when another pitupitu is installed where this one was
+/// started from (by Homebrew, `install.sh`, another user's `brew upgrade`
+/// on a shared Homebrew), restart on it. Until then this process runs code
+/// that is no longer on disk, and on macOS a program whose file was
+/// deleted may not start other programs, herdr included. Sessions are not
+/// touched: herdr is a separate program.
+pub fn restart_when_replaced() {
+    if !is_service_process() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(started) = binary_identity(&exe) else {
+        return;
+    };
+    std::thread::spawn(move || loop {
+        std::thread::sleep(BINARY_CHECK);
+        let now = binary_identity(&exe);
+        // Nothing there at all may be an install in progress.
+        if now.is_none() || now.as_ref() == Some(&started) {
+            continue;
+        }
+        tracing::info!("a new pitupitu was installed here; restarting on it");
+        match restart_soon() {
+            Ok(_) => return,
+            Err(e) => tracing::warn!("could not restart on the new pitupitu: {e:#}"),
+        }
+    });
 }
 
 pub fn uninstall() -> Result<Option<PathBuf>> {
@@ -464,6 +583,54 @@ mod tests {
         assert!(unit.contains("Environment=\"PATH=/home/me/.local/bin:/usr/bin\"\n"));
         let unit = systemd_unit(Path::new("/b/pitupitu"), Some(Path::new("/c/p.toml")), "/x");
         assert!(unit.contains("ExecStart=\"/b/pitupitu\" --config \"/c/p.toml\" connect\n"));
+    }
+
+    #[test]
+    fn a_replaced_binary_is_told_from_the_running_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("pitupitu");
+        std::fs::write(&bin, b"one").unwrap();
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&bin, &link).unwrap();
+        let started = binary_identity(&link).unwrap();
+        assert_eq!(binary_identity(&link), Some(started.clone()));
+        // An updater's copy-beside-and-rename: same path, another file.
+        let new = dir.path().join("pitupitu.new");
+        std::fs::write(&new, b"two").unwrap();
+        std::fs::rename(&new, &bin).unwrap();
+        assert_ne!(binary_identity(&link), Some(started.clone()));
+        // Homebrew's: the link points somewhere else.
+        let other = dir.path().join("other");
+        std::fs::write(&other, b"three").unwrap();
+        std::fs::remove_file(&link).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert_eq!(
+            binary_identity(&link).unwrap().0,
+            other.canonicalize().unwrap()
+        );
+        std::fs::remove_file(&link).unwrap();
+        assert_eq!(binary_identity(&link), None);
+    }
+
+    #[test]
+    fn the_launchd_restart_registers_again_when_refused() {
+        let script = launchd_restart_script(
+            "501",
+            Path::new("/Users/o'neil/Library/LaunchAgents/x.plist"),
+        );
+        assert!(script.starts_with("s='gui/501/chat.pitupitu.box'\nlaunchctl kickstart -k \"$s\""));
+        assert!(script.contains("grep -q 'state = running' && exit 0"));
+        assert!(script.contains(
+            "launchctl bootstrap 'gui/501' '/Users/o'\\''neil/Library/LaunchAgents/x.plist'"
+        ));
+        // The shell reads it.
+        let out = Command::new("sh")
+            .args(["-n", "-c", &script])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
     }
 
     #[test]
