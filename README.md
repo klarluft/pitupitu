@@ -7,6 +7,7 @@
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
   Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from your phone or any browser.<br>
+  Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
 
@@ -74,7 +75,7 @@ phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound Web
 
 - The box agent **dials out** to `wss://api.pitupitu.chat/v1/box`. Nothing connects in: no open port, no VPN, no certificate on your machine.
 - The cloud can ask for a fixed set of operations only, served through herdr: list, open and close workspaces and tabs, stop a session you asked it to stop, start an agent in a pane, send it a prompt or keys, read its screen, wait for it; and update this agent or herdr when you say so. There is no shell and no arbitrary command. The full list is in [docs/box-link.md](docs/box-link.md) and in [`calls.rs`](crates/pitupitu/src/calls.rs).
-- Your agents run as they always do, your own unmodified `claude`, `codex`, `opencode` or any other agent herdr supports, signed in by you, on your own subscriptions or keys, in your own permission mode. pitupitu never reads, sees or uses their credentials.
+- Your agents run as they always do, your own unmodified `claude`, `codex`, `opencode` or any other agent herdr supports, signed in by you, on your own subscriptions (Claude Code on your Claude plan, Codex on your ChatGPT plan) or keys, in your own permission mode. pitupitu never reads, sees or uses their credentials.
 - herdr's server: the box agent starts `herdr server` when none is running (at its own start, and whenever herdr stops answering) and never stops it. It runs on its own, so restarting or updating the box agent leaves your sessions running. Open `herdr` and you attach to that same server; if you opened `herdr` first, pitupitu uses yours. A server pitupitu starts gets what a terminal of yours would give it, since every pane inherits it: your login shell's environment and, on WSL, Windows interop (`code`, `explorer.exe`), the Windows `PATH` and WSLg's display and sound.
 - Where sessions go: a project gets a herdr workspace labelled after it, as you would make one; quick work in the pitupitu home folder (a lookup, a question) goes into tabs of one `pitupitu` workspace, so yours are not littered with them.
 - From your files, only `skills/*/SKILL.md` in the pitupitu home folder are sent, plus what the box reports about itself: its version and herdr's (and whether newer ones exist), which agent CLIs are installed (with their versions, and the models each offers here, from the agents' own model lists; see [Harnesses](docs/box-link.md#harnesses)), and the folders your agents worked in recently (only the folder paths and when, read from the agents' own session history; nothing else from those files). With history on, which it is unless you switch it off, more of that history is sent: see [History](#history).
