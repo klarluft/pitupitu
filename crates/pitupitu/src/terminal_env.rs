@@ -74,6 +74,8 @@ const NOT_FROM_LOGIN: &[&str] = &[
     "TERM_PROGRAM",
     "TERM_PROGRAM_VERSION",
     "COLORTERM",
+    // zsh's own, set again by every zsh from its startup files
+    "FPATH",
     PROBE_VAR,
 ];
 

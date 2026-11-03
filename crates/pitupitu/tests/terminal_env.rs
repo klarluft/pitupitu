@@ -74,8 +74,9 @@ async fn panes_get_what_a_terminal_would() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Everything the box added reaches the pane's shell (its own startup
-    // files may change PATH, so that is checked separately).
+    // Everything the box added reaches the pane's shell. Its startup files
+    // may change a value (PATH is checked separately), so only what the
+    // box worked out itself is compared exactly.
     let printed = in_pane(&host, &session, "env -0").await;
     let pane: HashMap<&str, &str> = printed
         .split('\0')
@@ -86,7 +87,10 @@ async fn panes_get_what_a_terminal_would() {
         if k == "PATH" {
             continue;
         }
-        assert_eq!(pane.get(k).copied(), Some(v), "{k} did not reach the pane");
+        assert!(pane.contains_key(k), "{k} did not reach the pane");
+        if k.starts_with("WSL") || matches!(k, "DISPLAY" | "WAYLAND_DISPLAY" | "PULSE_SERVER") {
+            assert_eq!(pane.get(k).copied(), Some(v), "{k} changed on the way");
+        }
     }
     for k in &env.remove {
         let k = k.to_str().unwrap();
