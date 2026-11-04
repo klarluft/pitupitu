@@ -119,11 +119,14 @@ pub enum Kind {
 }
 
 /// The repository a folder is in.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Git {
     pub root: PathBuf,
     pub remote: Option<String>,
     pub branch: Option<String>,
+    /// The repository's main folder, when `root` is a worktree of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<PathBuf>,
 }
 
 /// A `session` note's record.
@@ -157,6 +160,9 @@ pub struct Repo {
     pub root: PathBuf,
     pub remote: Option<String>,
     pub branch: Option<String>,
+    /// As on [`Git`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main: Option<PathBuf>,
     pub head: String,
     pub commits: Vec<Commit>,
 }
@@ -848,8 +854,28 @@ pub fn repo_of(dir: &Path) -> Option<Git> {
     Some(Git {
         remote: git_line(&root, &["remote", "get-url", "origin"]).map(|r| clean_remote(&r)),
         branch: branch(&root),
+        main: main_of(&root),
         root,
     })
+}
+
+/// The main folder of the repository `root` is a worktree of; `None` for
+/// the main folder itself.
+fn main_of(root: &Path) -> Option<PathBuf> {
+    let common = git_line(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common = PathBuf::from(common);
+    if common.file_name()? != ".git" {
+        return None;
+    }
+    let main = common.parent()?;
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    (!same(main, root)).then(|| main.to_path_buf())
 }
 
 fn branch(root: &Path) -> Option<String> {
@@ -916,6 +942,16 @@ struct State {
     /// session last worked there (Unix seconds).
     #[serde(default)]
     repos: BTreeMap<PathBuf, RepoSent>,
+    /// Per session folder: its repository as last seen, so a session keeps
+    /// it once the folder is gone (a worktree removed), and when.
+    #[serde(default)]
+    folders: BTreeMap<PathBuf, FolderSeen>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct FolderSeen {
+    git: Git,
+    seen: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1059,7 +1095,22 @@ impl Reader {
                 return g.clone();
             }
         }
-        let g = repo_of(cwd);
+        let now = unix(SystemTime::now()) / 1000;
+        let g = match repo_of(cwd) {
+            Some(g) => {
+                let seen = FolderSeen {
+                    git: g.clone(),
+                    seen: now,
+                };
+                self.state.folders.insert(cwd.to_path_buf(), seen);
+                Some(g)
+            }
+            None if cwd.is_dir() => {
+                self.state.folders.remove(cwd);
+                None
+            }
+            None => self.state.folders.get(cwd).map(|f| f.git.clone()),
+        };
         self.git_cache
             .insert(cwd.to_path_buf(), (Instant::now(), g.clone()));
         g
@@ -1137,6 +1188,9 @@ impl Reader {
         self.state
             .repos
             .retain(|root, r| now.saturating_sub(r.seen) <= WINDOW && root.is_dir());
+        self.state
+            .folders
+            .retain(|_, f| now.saturating_sub(f.seen) <= WINDOW);
         let mut out = Vec::new();
         for (root, sent) in &self.state.repos {
             let Some(head) = git_line(root, &["rev-parse", "HEAD"]) else {
@@ -1153,6 +1207,7 @@ impl Reader {
                     remote: git_line(root, &["remote", "get-url", "origin"])
                         .map(|r| clean_remote(&r)),
                     commits: commits(root, branch.as_deref()),
+                    main: main_of(root),
                     branch,
                     head,
                 },
@@ -2067,6 +2122,63 @@ mod tests {
     /// The reader against a made-up home: a backfill, nothing again
     /// unchanged, a grown log sent again, the state file kept for a
     /// restart and removed by `reset`.
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    }
+
+    #[test]
+    fn a_worktree_names_its_main_folder_and_keeps_its_repo_once_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let main = home.path().join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        git_in(&main, &["init", "-q"]);
+        git_in(
+            &main,
+            &["remote", "add", "origin", "https://example.com/me/app.git"],
+        );
+        git_in(&main, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let tree = home.path().join("tree");
+        git_in(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                tree.to_str().unwrap(),
+                "-b",
+                "work",
+            ],
+        );
+
+        assert_eq!(repo_of(&main).unwrap().main, None);
+        let mut r = Reader::new(home.path().to_path_buf(), state.path());
+        let seen = r.git_for(&tree).unwrap();
+        assert_eq!(
+            seen.main.unwrap().canonicalize().unwrap(),
+            main.canonicalize().unwrap()
+        );
+
+        git_in(&main, &["worktree", "remove", tree.to_str().unwrap()]);
+        r.git_cache.clear();
+        let gone = r.git_for(&tree).unwrap();
+        assert_eq!(
+            gone.remote.as_deref(),
+            Some("https://example.com/me/app.git")
+        );
+
+        // A folder that is there and no repo any more says so.
+        std::fs::create_dir_all(&tree).unwrap();
+        r.git_cache.clear();
+        assert_eq!(r.git_for(&tree), None);
+    }
+
     #[test]
     fn the_reader_sends_what_changed() {
         let home = tempfile::tempdir().unwrap();
