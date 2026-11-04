@@ -169,7 +169,22 @@ enum Cmd {
         session: Vec<String>,
     },
     /// This box's sessions, and which ones pitupitu follows (●).
-    Sessions,
+    Sessions {
+        /// Another of your boxes, as `pitupitu settings` lists them.
+        #[arg(long = "box", value_name = "NAME")]
+        on: Option<String>,
+    },
+    /// Bring a session to the front in herdr on its machine. With no name,
+    /// the session this runs in.
+    Show {
+        /// The session's pane id (as `pitupitu sessions` lists it) or
+        /// words from its title.
+        session: Vec<String>,
+        /// A session on another of your boxes, as `pitupitu settings`
+        /// lists them.
+        #[arg(long = "box", value_name = "NAME")]
+        on: Option<String>,
+    },
     /// The pitupitu skill for Claude Code and Codex.
     Skill {
         #[command(subcommand)]
@@ -644,12 +659,15 @@ async fn main() -> Result<()> {
         Cmd::Unfollow { session } => {
             follow_cmd(&Config::load(&path)?, &session, false, as_json).await
         }
-        Cmd::Sessions => {
-            let body = sessions::list(&Config::load(&path)?).await?;
+        Cmd::Show { session, on } => {
+            show_cmd(&Config::load(&path)?, &session, on.as_deref(), as_json).await
+        }
+        Cmd::Sessions { on } => {
+            let body = sessions::list(&Config::load(&path)?, on.as_deref()).await?;
             if as_json {
                 println!("{body:#}");
             } else {
-                print!("{}", sessions::table(&body));
+                print!("{}", sessions::table(&body, on.as_deref()));
             }
             Ok(())
         }
@@ -1088,48 +1106,81 @@ async fn pick_automation(
 
 /// `pitupitu follow` / `unfollow`: the session named, or the one this
 /// runs in. Exits 2 when it cannot tell which session is meant.
-async fn follow_cmd(cfg: &Config, words: &[String], on: bool, as_json: bool) -> Result<()> {
+/// The session `words` name on this box or the box `on`, as its pane id
+/// and title; with no words, the session this runs in. Exits 2 when it
+/// cannot tell which is meant.
+async fn pick_session(
+    cfg: &Config,
+    command: &str,
+    words: &[String],
+    on: Option<&str>,
+) -> Result<(String, String)> {
     let query = words.join(" ");
-    let (key, title) = if query.trim().is_empty() {
+    if query.trim().is_empty() {
+        if let Some(b) = on {
+            eprintln!("Name the session on {b}: pitupitu {command} <title> --box {b}");
+            std::process::exit(2);
+        }
         let Some(pane) = std::env::var(sessions::PANE_ENV)
             .ok()
             .filter(|p| !p.is_empty())
         else {
-            eprintln!("{}", sessions::NOT_IN_HERDR);
+            eprintln!("{}", sessions::not_in_herdr(command));
             std::process::exit(2);
         };
         // The title is only for the line printed; the pane is enough.
-        let title = match sessions::list(cfg).await {
+        let title = match sessions::list(cfg, None).await {
             Ok(body) => match sessions::find(&body, &pane) {
                 sessions::Found::One(s) => sessions::title(s),
                 _ => pane.clone(),
             },
             Err(_) => pane.clone(),
         };
-        (pane, title)
-    } else {
-        let body = sessions::list(cfg).await?;
-        match sessions::find(&body, &query) {
-            sessions::Found::One(s) => (
-                s["key"].as_str().unwrap_or_default().to_string(),
-                sessions::title(s),
-            ),
-            sessions::Found::None => {
-                eprintln!(
+        return Ok((pane, title));
+    }
+    let body = sessions::list(cfg, on).await?;
+    match sessions::find(&body, &query) {
+        sessions::Found::One(s) => Ok((
+            s["key"].as_str().unwrap_or_default().to_string(),
+            sessions::title(s),
+        )),
+        sessions::Found::None => {
+            match on {
+                Some(b) => eprintln!(
+                    "No session on {b} matches \"{query}\"; `pitupitu sessions --box {b}` lists them."
+                ),
+                None => eprintln!(
                     "No session on this box matches \"{query}\"; `pitupitu sessions` lists them."
-                );
-                std::process::exit(2);
+                ),
             }
-            sessions::Found::Many(hits) => {
-                eprintln!(
-                    "\"{query}\" matches more than one session; name one by more of its title \
-                     or by its id:\n{}",
-                    sessions::choices(&hits)
-                );
-                std::process::exit(2);
-            }
+            std::process::exit(2);
         }
-    };
+        sessions::Found::Many(hits) => {
+            eprintln!(
+                "\"{query}\" matches more than one session; name one by more of its title \
+                 or by its id:\n{}",
+                sessions::choices(&hits)
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+async fn show_cmd(cfg: &Config, words: &[String], on: Option<&str>, as_json: bool) -> Result<()> {
+    let (key, title) = pick_session(cfg, "show", words, on).await?;
+    let shown = sessions::show(cfg, &key, on).await?;
+    let shown_on = shown["box"].as_str().unwrap_or("its machine");
+    if as_json {
+        println!("{}", json!({"key": key, "title": title, "box": shown_on}));
+    } else {
+        println!("{}", sessions::shown(&title, shown_on));
+    }
+    Ok(())
+}
+
+async fn follow_cmd(cfg: &Config, words: &[String], on: bool, as_json: bool) -> Result<()> {
+    let command = if on { "follow" } else { "unfollow" };
+    let (key, title) = pick_session(cfg, command, words, None).await?;
     sessions::follow(cfg, &key, on).await?;
     if as_json {
         println!("{}", json!({"key": key, "title": title, "followed": on}));
