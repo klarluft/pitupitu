@@ -1,12 +1,13 @@
-//! `pitupitu follow`, `unfollow` and `sessions` end to end against a
-//! stand-in cloud: what they ask, what they print, and the exit code
+//! `pitupitu follow`, `unfollow`, `sessions` and `show` end to end against
+//! a stand-in cloud: what they ask, what they print, and the exit code
 //! when they cannot tell which session is meant.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const KEY: &str = "ptp_test";
@@ -24,23 +25,66 @@ fn authorized(h: &HeaderMap) -> bool {
     h.get("authorization").and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {KEY}"))
 }
 
-/// The cloud's two routes; every `PATCH /v1/settings` body is kept.
+/// The sessions of the box `laptop`.
+fn on_laptop() -> Value {
+    json!({"sessions": [
+        {"key": "w7:p1", "title": "Deploy the site", "agent": "claude", "cwd": "/c",
+         "status": "idle", "followed": false, "task": false}
+    ]})
+}
+
+/// The cloud's routes; every `PATCH /v1/settings` and
+/// `POST /v1/sessions/show` body is kept.
 async fn cloud() -> (String, Arc<Mutex<Vec<Value>>>) {
     let patches = Arc::new(Mutex::new(Vec::new()));
     let app =
         Router::new()
             .route(
                 "/v1/sessions",
-                get(|h: HeaderMap| async move {
-                    if authorized(&h) {
-                        (StatusCode::OK, Json(sessions()))
-                    } else {
-                        (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({"error": "invalid_key"})),
-                        )
-                    }
-                }),
+                get(
+                    |h: HeaderMap, Query(q): Query<HashMap<String, String>>| async move {
+                        if !authorized(&h) {
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(json!({"error": "invalid_key"})),
+                            );
+                        }
+                        match q.get("box").map(String::as_str) {
+                            None => (StatusCode::OK, Json(sessions())),
+                            Some("laptop") => (StatusCode::OK, Json(on_laptop())),
+                            Some("empty") => (StatusCode::OK, Json(json!({"sessions": []}))),
+                            Some(b) => (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({"error": {
+                                    "code": "bad_request",
+                                    "message": format!("this account has no box called {b}"),
+                                }})),
+                            ),
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v1/sessions/show",
+                post(
+                    |State(p): State<Arc<Mutex<Vec<Value>>>>,
+                     h: HeaderMap,
+                     Json(body): Json<Value>| async move {
+                        assert!(authorized(&h));
+                        p.lock().unwrap().push(body.clone());
+                        if body["key"] == "w2:p3" {
+                            return (
+                                StatusCode::CONFLICT,
+                                Json(json!({"error": {
+                                    "code": "not_shown",
+                                    "message": "pitupitu on testbox needs an update to do this.",
+                                }})),
+                            );
+                        }
+                        let on = body["box"].as_str().unwrap_or("testbox");
+                        (StatusCode::OK, Json(json!({"key": body["key"], "box": on})))
+                    },
+                ),
             )
             .route(
                 "/v1/settings",
@@ -133,6 +177,77 @@ async fn follow_the_session_this_runs_in_or_one_by_name() {
             json!({"follow": {"key": "w1:p1", "on": false}}),
         ]
     );
+}
+
+#[tokio::test]
+async fn show_the_session_this_runs_in_or_one_by_name_on_any_box() {
+    let (url, asked) = cloud().await;
+
+    let (code, _, err) = run(&url, None, &["show"]).await;
+    assert_eq!(code, 2);
+    assert_eq!(
+        err.trim(),
+        "Run this inside a session in herdr, or name one: pitupitu show <title>"
+    );
+
+    let (code, out, _) = run(&url, Some("w1:p1"), &["show"]).await;
+    assert_eq!(code, 0);
+    assert_eq!(
+        out.trim(),
+        "\"Fix the login page\" is in front in herdr on testbox, if herdr is open there."
+    );
+
+    let (code, out, _) = run(&url, None, &["show", "deploy", "--box", "laptop", "--json"]).await;
+    assert_eq!(code, 0);
+    assert_eq!(
+        serde_json::from_str::<Value>(&out).unwrap(),
+        json!({"key": "w7:p1", "title": "Deploy the site", "box": "laptop"})
+    );
+
+    // Refused: the cloud's own sentence, not a status code.
+    let (code, _, err) = run(&url, None, &["show", "login", "tests"]).await;
+    assert_eq!(code, 1);
+    assert_eq!(
+        err.trim(),
+        "Error: pitupitu on testbox needs an update to do this."
+    );
+
+    // Unclear which: exit 2, nothing sent beyond the three above.
+    let (code, _, err) = run(&url, None, &["show", "login"]).await;
+    assert_eq!(code, 2);
+    assert!(err.contains("Login tests  (w2:p3)"), "{err}");
+    let (code, _, err) = run(&url, None, &["show", "login", "--box", "laptop"]).await;
+    assert_eq!(code, 2);
+    assert!(err.contains("pitupitu sessions --box laptop"), "{err}");
+    let (code, _, err) = run(&url, Some("w1:p1"), &["show", "--box", "laptop"]).await;
+    assert_eq!(code, 2);
+    assert!(err.contains("Name the session on laptop"), "{err}");
+    let (code, _, err) = run(&url, None, &["show", "x", "--box", "nope"]).await;
+    assert_eq!(code, 1);
+    assert!(err.contains("no box called nope"), "{err}");
+
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [
+            json!({"key": "w1:p1"}),
+            json!({"key": "w7:p1", "box": "laptop"}),
+            json!({"key": "w2:p3"}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn sessions_of_another_box_by_name() {
+    let (url, _) = cloud().await;
+    let (code, out, _) = run(&url, None, &["sessions", "--box", "laptop"]).await;
+    assert_eq!(code, 0);
+    assert!(
+        out.starts_with("○  Deploy the site  claude  idle  w7:p1"),
+        "{out}"
+    );
+    let (code, out, _) = run(&url, None, &["sessions", "--box", "empty"]).await;
+    assert_eq!(code, 0);
+    assert_eq!(out, "No sessions on empty right now.\n");
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 ---
 name: pitupitu
-description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), note something for later on their list, set a reminder, schedule a session, or check pitupitu's status.
+description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), show a session in herdr on its machine, note something for later on their list, set a reminder, schedule a session, or check pitupitu's status.
 metadata:
   managed-by: pitupitu
   version: "{{version}}"
@@ -34,7 +34,8 @@ Every command takes `--json` and never prompts when there is no terminal.
 - `pitupitu agent claude|codex|kiro|opencode|auto`: the agent a session gets when the person does not say; any agent herdr can start works the same (`pi`, `qwen`, `cline`, `kilo`, `gemini`, `agy`, …); `auto`: the one the machine has, and with several pitupitu asks. `pitupitu box agent claude|codex|kiro|opencode|auto`: this machine's own default over the account's.
 - `pitupitu model claude opus` / `pitupitu model codex gpt-5` / `pitupitu model claude --clear`: the model that agent runs on when the person does not say, as the CLI names it.
 - `pitupitu follow` / `pitupitu unfollow`: follow a session, so pitupitu tells the person when it finishes or needs them, or stop. With nothing after it, the session the command runs in (it must run inside herdr); or name one by words from its title or by its id (`pitupitu follow login page`). `pitupitu follow --off` is the same as `unfollow`.
-- `pitupitu sessions`: this machine's sessions with their status, which are followed (●) and which pitupitu started itself.
+- `pitupitu sessions`: this machine's sessions with their status, which are followed (●) and which pitupitu started itself. `pitupitu sessions --box laptop`: those of another of the person's machines.
+- `pitupitu show`: bring a session to the front in herdr on its machine, seen there if herdr is open. With nothing after it, the session the command runs in (it must run inside herdr); or name one by words from its title or by its id, as for `follow`: `pitupitu show the signup test`. `pitupitu show the signup test --box laptop` shows one on another of the person's machines.
 - `pitupitu place add <name> <path>` / `pitupitu place rm <name>` / `pitupitu places`: folders on this machine with a name the person says ("in acme, run the tests"). Use it when they ask to name a project folder for pitupitu; the path is made absolute.
 
 When the person says to keep them posted on this session, to let pitupitu report on it, to tell them when it is done, or the like, run `pitupitu follow` with nothing after it, from inside this session: it follows the session you are in. Tell them it is done in one line. Use `pitupitu sessions` to see what is followed already.
