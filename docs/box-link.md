@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **9** (the cloud also accepts 8).
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **10** (the cloud also accepts 9).
 
 ## Connecting
 
@@ -38,7 +38,7 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 9, "version": "0.11.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 10, "version": "0.11.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
@@ -62,11 +62,19 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `available`: the coding agents ("harnesses") found on `PATH`, one per profile ("Harnesses", below) whose `command` answers `--version`, with the first line it printed, and what the harness's lister last said: `signed_in` (`null` when the harness cannot say), `models` (`null` when not listed: no lister, signed out, or the lister failed, `models_error` saying which, in plain words), and `models_at`, when the lister ran. The box never reads an agent's credentials to tell whether it is signed in; only a lister that asks the agent itself (Kiro CLI's `whoami`) says so.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 8 had the same `hello` and every call but `close_pane`. Protocol 7 had the same `hello` with `available` holding `kind` and `version` only, for five kinds (`claude`, `codex`, `gemini`, `agy`, `opencode`), no `harnesses` note and no `refresh_models`. Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 9 had the same `hello` and calls, and its `AgentInfo` carried `agent_session` only for an id. Protocol 8 had the same `hello` and every call but `close_pane`. Protocol 7 had the same `hello` with `available` holding `kind` and `version` only, for five kinds (`claude`, `codex`, `gemini`, `agy`, `opencode`), no `harnesses` note and no `refresh_models`. Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
 Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](../crates/herdr/src/types.rs) (`AgentInfo`, `Workspace`, `Created`).
+
+`AgentInfo` is what herdr says of an agent, in `hello`, the `agents` note and every call's reply. That includes `agent_session`, left out when herdr reports none:
+
+```json
+"agent_session": {"agent": "claude", "kind": "id", "value": "0f0e1d1c-…"}
+```
+
+It says which of the agent's own sessions runs in the pane, as herdr's integration for that agent reports it, so the cloud can start the same session again after its pane closed (`start_agent` with the agent's own resume argument in `agent_args`; the box starts nothing by itself). `kind` is `id`, or `path` for an agent whose integration names the log file (pi and omp: the path of the log, which holds the folder's name). Only that id or path leaves the box: nothing from inside the session. It is sent whether history is on or off, as the rest of `AgentInfo` is. Agents herdr has no integration for (Kiro CLI, Cline, Amp, Maki, Muse), or whose integration is not installed, have none; for the ones the box reads, the `session` note's `id` is the same id.
 
 | call | args | ok |
 |---|---|---|
@@ -122,7 +130,7 @@ The agent's whole last reply, read from its own session log, for when the end of
 {"text": "# Findings\n\n…\n\nIn short: …", "at": "2026-10-20T09:40:00.000Z", "turn": 4, "cut": false}
 ```
 
-- Which log: herdr's `agent get` for `agent` (a name or a pane, as for the other calls) carries `agent_session`, the agent's own session as herdr's integration reports it. By `id`: Claude Code's `~/.claude/projects/*/<id>.jsonl`, Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`, Kiro's `sess_<id>` folder, pi's `…_<id>.jsonl`, Qwen Code's `chats/<id>.jsonl`, Cline's `<id>.messages.json`, OpenCode's and Kilo Code's session `<id>` (of the logs under "What is read"). By `path`: only when the path is one of those files (pi's integration reports its path). Without a reported session: for Claude Code and Codex, no log (their integrations report it). For the others (herdr has no integration for Kiro and Cline; pi's, OpenCode's, Kilo Code's and Qwen Code's may not be installed), the log of that agent whose folder is the pane's folder and which was written in the last 10 minutes, but only when exactly one fits: a wrong log is worse than none. `agent_session` itself is not sent to the cloud, in this reply or in `AgentInfo`.
+- Which log: herdr's `agent get` for `agent` (a name or a pane, as for the other calls) carries `agent_session`, the agent's own session as herdr's integration reports it. By `id`: Claude Code's `~/.claude/projects/*/<id>.jsonl`, Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`, Kiro's `sess_<id>` folder, pi's `…_<id>.jsonl`, Qwen Code's `chats/<id>.jsonl`, Cline's `<id>.messages.json`, OpenCode's and Kilo Code's session `<id>` (of the logs under "What is read"). By `path`: only when the path is one of those files (pi's integration reports its path). Without a reported session: for Claude Code and Codex, no log (their integrations report it). For the others (herdr has no integration for Kiro and Cline; pi's, OpenCode's, Kilo Code's and Qwen Code's may not be installed), the log of that agent whose folder is the pane's folder and which was written in the last 10 minutes, but only when exactly one fits: a wrong log is worse than none.
 - `text`: the `text` blocks of the agent's answer to the person's last prompt (what counts as a prompt is what a `session` note counts as a `you` turn), in order, each trimmed, joined by a blank line. A reply interleaved with tool calls is several log entries; all of their text is in it. Never tool calls or their results, thinking, Claude Code's own additions, notifications or subagents' transcripts. While the agent has written nothing yet for the newest prompt, the reply before it is given. Redacted as `session` notes are.
 - `cut`: the text was longer than 64 KB. It is then its first 16 KB, a line `[… N characters left out …]`, and its end, 64 KB in all; the end is kept because that is where a reply concludes.
 - `at`: when the reply's last text block was written, as the log has it. `turn`: how many prompts the person had typed in that session by then (the first is 1), so the reply answers prompt `turn`.
@@ -142,7 +150,7 @@ Runs the update the way the thing was installed, exactly as `pitupitu update [bo
 
 - `home`: `{"note": "home", "files": [{"path": "skills/deploy/SKILL.md", "text": "…"}]}`. Sent after `hello` and within about a second of any change. Only `skills/*/SKILL.md` from the home folder are ever sent, each cut at 64 KB. (0.1 also sent `PITUPITU.md`; the person's preferences live in the cloud now.)
 - `inventory`: `{"note": "inventory", "install": …, "latest": …, "herdr": …, "kinds": […], "available": […], "recent": […]}`, the fields of `hello` again, sent when any of them changed: herdr starts or stops answering, `herdr status` reads differently (looked at every minute and after an update), a newer release appears (asked every six hours), or `recent` or `available` changed (both looked at every five minutes; `available` also on every connect).
-- `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, each entry with the `agent_session` herdr reports when that is an id (which of the agent's own sessions the pane holds, `{"agent", "kind": "id", "value"}`; a log's path is never sent), sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq)` differs from the last list sent. The box looks once a second. An entry also carries `background: true` when the agent is back at its prompt and left a job running. That comes from the pane's processes, not from herdr: a process counts when it inherited the pane's `HERDR_PANE_ID` in this box's herdr session, started during a turn, no longer has the pane's terminal, does not use pipes or sockets for both stdin and stdout, and is no known helper (`crates/pitupitu/src/jobs.rs`). Linux reads `/proc`, macOS `ps` and `lsof`; the rest of a process's environment is read past and never kept, and only this flag leaves the box. A change of the flag sends a new note.
+- `agents`: `{"note": "agents", "agents": [<AgentInfo>…]}`, herdr's full agent list, each entry with its `agent_session` (above), sent whenever the set of panes or any pane's `(agent_status, state_change_seq, completion_seq, background, agent_session)` differs from the last list sent. The box looks once a second. An entry also carries `background: true` when the agent is back at its prompt and left a job running. That comes from the pane's processes, not from herdr: a process counts when it inherited the pane's `HERDR_PANE_ID` in this box's herdr session, started during a turn, no longer has the pane's terminal, does not use pipes or sockets for both stdin and stdout, and is no known helper (`crates/pitupitu/src/jobs.rs`). Linux reads `/proc`, macOS `ps` and `lsof`; the rest of a process's environment is read past and never kept, and only this flag leaves the box. A change of the flag sends a new note.
 
 - `session` and `git`: the box's history, only while the cloud's `settings` say `history: true` (below). In a worktree, `git` and `repo` carry `main`, the repository's main folder. A session whose folder is gone keeps the `git` last seen for it, for as long as the history window. The `last_message` call answers only then too.
 

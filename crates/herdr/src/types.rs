@@ -149,19 +149,15 @@ pub struct AgentInfo {
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
     /// Which of the agent's own sessions runs in the pane, as herdr's
-    /// integration reports it. Read on the box to find the agent's log
-    /// (`last_message`). An id is sent with the agent list, so the cloud can
-    /// tell which session a pane holds; a path never is.
-    #[serde(default, skip_serializing_if = "no_session_id")]
+    /// integration reports it. The box finds the agent's log with it
+    /// (`last_message`) and sends it on, so the cloud can resume the session
+    /// after its pane closed: the id or the log's path, nothing from inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<AgentSession>,
     /// Back at its prompt with a job still running. Never from herdr: the
     /// box agent sets it from the pane's processes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
-}
-
-fn no_session_id(session: &Option<AgentSession>) -> bool {
-    session.as_ref().is_none_or(|s| s.kind != "id")
 }
 
 /// herdr's `agent_session`: the agent's own session, by id (Claude Code's
