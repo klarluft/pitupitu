@@ -17,6 +17,13 @@
 //!   queried, never another table (those databases also keep the
 //!   harnesses' accounts and credentials). A session there is named
 //!   `<database>#<session id>`.
+//! - Antigravity:
+//!   `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`,
+//!   with its folder and title from `conversation_summaries.db` there, opened
+//!   read-only, that one table and only those columns. A conversation
+//!   that table does not name, or names as a subagent's, is not listed.
+//! - Maki: `~/.local/state/maki/sessions/<id>.jsonl`, or
+//!   `~/.maki/sessions/<id>.jsonl` where that older folder exists.
 //!
 //! Nothing else under those folders is opened: not the agents' settings,
 //! their credentials, or their process registries.
@@ -38,12 +45,16 @@ const LINES_MAX: usize = 25;
 const META_MAX: u64 = 8 * 1024 * 1024;
 /// How long a database query waits for a writer before giving up.
 const DB_BUSY: Duration = Duration::from_millis(250);
+/// Antigravity's folder, under the home folder.
+const AGY_DIR: &str = ".gemini/antigravity-cli";
+/// A conversation's transcript, under its folder in `brain/`.
+const AGY_TRANSCRIPT: &str = ".system_generated/logs/transcript.jsonl";
 
 /// One session's log.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LogRef {
-    /// `claude`, `codex`, `kiro`, `pi`, `qwen`, `cline`, `opencode` or
-    /// `kilo`: herdr's name for the agent.
+    /// `claude`, `codex`, `kiro`, `pi`, `qwen`, `cline`, `opencode`,
+    /// `kilo`, `agy` or `maki`: herdr's name for the agent.
     pub agent: &'static str,
     /// The file, or `<database>#<session id>` for a database session.
     pub path: PathBuf,
@@ -99,6 +110,27 @@ pub(crate) fn list(home: &Path) -> Vec<LogRef> {
     }
     for (agent, db) in databases(home) {
         logs.extend(db_sessions(&db, agent));
+    }
+    // Antigravity: brain/<id>/.system_generated/logs/transcript.jsonl.
+    let agy = home.join(AGY_DIR);
+    let summaries = agy_summaries(&agy);
+    for dir in dirs_in(&agy.join("brain")) {
+        let id = dir.file_name().map(|n| n.to_string_lossy());
+        let Some(summary) = id.and_then(|id| summaries.get(id.as_ref())) else {
+            continue;
+        };
+        let at = logs.len();
+        push_file(&mut logs, dir.join(AGY_TRANSCRIPT), "jsonl", "agy");
+        if let Some(log) = logs.get_mut(at) {
+            log.cwd = summary.cwd.as_ref().map(PathBuf::from);
+        }
+    }
+    // Maki: its state folder's sessions/<id>.jsonl; `~/.maki`, where it
+    // exists, takes the place of that folder.
+    for state in [".local/state/maki", ".maki"] {
+        for f in files_in(&home.join(state).join("sessions")) {
+            push_file(&mut logs, f, "jsonl", "maki");
+        }
     }
     logs
 }
@@ -241,6 +273,105 @@ pub(crate) fn cline_meta(messages: &Path) -> Option<Meta> {
         cwd: v["cwd"].as_str().map(str::to_string),
         title: v["metadata"]["title"].as_str().map(str::to_string),
     })
+}
+
+// ---------------------------------------------------------------------
+// Antigravity's summaries.
+
+/// The folder of a `file:///…` URI, as Antigravity's `workspace_uris` hold
+/// it.
+fn path_of_uri(uri: &str) -> Option<String> {
+    let bytes = uri.strip_prefix("file://")?.as_bytes();
+    if bytes.first() != Some(&b'/') {
+        return None;
+    }
+    let hex = |b: u8| char::from(b).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            out.push(hex(*bytes.get(i + 1)?)? << 4 | hex(*bytes.get(i + 2)?)?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// What `conversation_summaries` says about each of the person's own
+/// conversations: its folder and title, by id. Only those columns and the
+/// ones naming a subagent's conversation, which are left out, are read.
+fn query_summaries(db: &Path) -> rusqlite::Result<HashMap<String, Meta>> {
+    let c = open_db(db)?;
+    let mut q = c.prepare(
+        "SELECT conversation_id, title, workspace_uris FROM conversation_summaries
+          WHERE parent_conversation_id = '' AND nesting_depth = 0",
+    )?;
+    let rows = q.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (id, title, uris) = row?;
+        let uris: Vec<String> = uris
+            .and_then(|u| serde_json::from_str(&u).ok())
+            .unwrap_or_default();
+        let meta = Meta {
+            id: Some(id.clone()),
+            cwd: uris.iter().find_map(|u| path_of_uri(u)),
+            title: title.filter(|t| !t.is_empty()),
+        };
+        out.insert(id, meta);
+    }
+    Ok(out)
+}
+
+/// The summaries of each Antigravity folder, kept while the database is
+/// unchanged.
+type Summaries = (Vec<(u64, SystemTime)>, HashMap<String, Meta>);
+static SUMMARIES: LazyLock<Mutex<HashMap<PathBuf, Summaries>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn agy_summaries(agy: &Path) -> HashMap<String, Meta> {
+    let db = agy.join("conversation_summaries.db");
+    let Some(stamp) = db_stamp(&db) else {
+        return HashMap::new();
+    };
+    let mut kept = SUMMARIES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((s, summaries)) = kept.get(&db) {
+        if *s == stamp {
+            return summaries.clone();
+        }
+    }
+    match query_summaries(&db) {
+        Ok(summaries) => {
+            kept.insert(db, (stamp, summaries.clone()));
+            summaries
+        }
+        Err(e) => {
+            tracing::debug!("reading Antigravity's summaries: {e}");
+            HashMap::new()
+        }
+    }
+}
+
+/// The conversation id of an Antigravity transcript: the name of its
+/// folder in `brain/`.
+pub(crate) fn agy_id(transcript: &Path) -> Option<String> {
+    let dir = transcript.ancestors().nth(3)?;
+    Some(dir.file_name()?.to_str()?.to_string())
+}
+
+/// What Antigravity's summaries say about the transcript's conversation.
+pub(crate) fn agy_meta(transcript: &Path) -> Option<Meta> {
+    let agy = transcript.ancestors().nth(5)?;
+    agy_summaries(agy).remove(&agy_id(transcript)?)
 }
 
 // ---------------------------------------------------------------------
@@ -482,6 +613,69 @@ pub(crate) mod tests {
         );
     }
 
+    /// A made-up `conversation_summaries.db`, with two of the columns the
+    /// box must not read.
+    pub(crate) fn make_agy_summaries(agy: &Path, rows: &[(&str, &str, &str, &str, i64)]) {
+        std::fs::create_dir_all(agy).unwrap();
+        let c = Connection::open(agy.join("conversation_summaries.db")).unwrap();
+        c.execute_batch(
+            "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT,
+                preview TEXT, workspace_uris TEXT, parent_conversation_id TEXT,
+                nesting_depth INTEGER, raw_summary BLOB);",
+        )
+        .unwrap();
+        for (id, title, uris, parent, depth) in rows {
+            c.execute(
+                "INSERT INTO conversation_summaries
+                 VALUES (?1, ?2, 'ADDED CONTEXT', ?3, ?4, ?5, x'00')",
+                rusqlite::params![id, title, uris, parent, depth],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_workspace_uri_becomes_a_folder() {
+        assert_eq!(
+            path_of_uri("file:///home/me/my%20app").as_deref(),
+            Some("/home/me/my app")
+        );
+        for uri in [
+            "/home/me",
+            "file://host/x",
+            "https://example.com/",
+            "file:///a%2",
+            "file:///a%zz",
+        ] {
+            assert_eq!(path_of_uri(uri), None, "{uri}");
+        }
+    }
+
+    #[test]
+    fn antigravity_lists_only_the_conversations_its_summaries_name_as_the_persons() {
+        let home = tempfile::tempdir().unwrap();
+        let agy = home.path().join(AGY_DIR);
+        make_agy_summaries(
+            &agy,
+            &[
+                ("a-1", "Plant", r#"["file:///garden"]"#, "", 0),
+                ("a-2", "Helper", r#"["file:///garden"]"#, "a-1", 1),
+            ],
+        );
+        for id in ["a-1", "a-2", "a-3"] {
+            let p = agy.join("brain").join(id).join(AGY_TRANSCRIPT);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "{}\n").unwrap();
+        }
+        let logs = list(home.path());
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert_eq!(logs[0].agent, "agy");
+        assert_eq!(logs[0].cwd.as_deref(), Some(Path::new("/garden")));
+        assert_eq!(agy_id(&logs[0].path).as_deref(), Some("a-1"));
+        let meta = agy_meta(&logs[0].path).unwrap();
+        assert_eq!(meta.title.as_deref(), Some("Plant"));
+    }
+
     #[test]
     fn every_agents_logs_are_listed() {
         let home = tempfile::tempdir().unwrap();
@@ -510,6 +704,10 @@ pub(crate) mod tests {
         put(".cline/data/sessions/1_f/1_f.messages.json", "{}");
         put(".cline/data/sessions/1_f/1_f.json", "{}");
         put(".cline/data/settings/providers.json", "{}");
+        put(".local/state/maki/sessions/h.jsonl", "{}\n");
+        put(".local/state/maki/sessions/cwd_latest.json", "{}");
+        put(".local/state/maki/sessions/archive/h/1.jsonl", "{}\n");
+        put(".maki/sessions/i.jsonl", "{}\n");
         let c = make_db(&h.join(".local/share/opencode/opencode.db"));
         c.execute_batch(
             "INSERT INTO session VALUES ('ses_g', 'p', NULL, '/w', 'T', 1, 2, NULL);
@@ -533,6 +731,8 @@ pub(crate) mod tests {
                 ("cline", "1_f.messages.json".to_string()),
                 ("codex", "rollout-x-b.jsonl".to_string()),
                 ("kiro", "messages.jsonl".to_string()),
+                ("maki", "h.jsonl".to_string()),
+                ("maki", "i.jsonl".to_string()),
                 ("opencode", "opencode.db#ses_g".to_string()),
                 ("pi", "2026-10-01T00-00-00-000Z_d.jsonl".to_string()),
                 ("qwen", "e.jsonl".to_string()),
