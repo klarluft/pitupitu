@@ -99,7 +99,7 @@ Stops a session when the person asks, including one they started by hand in herd
 
 ### `focus_session`
 
-Brings a session to the front in herdr on this machine, when the person asks for it ("show it on my desk"). The box asks herdr where `pane` is (`pane get`), then focuses its workspace and its tab (`workspace focus`, `tab focus`). Nothing is opened, closed or typed. It is the one call that moves the view: everything else pitupitu opens is created with `--no-focus`.
+Brings a session to the front in herdr on this machine, when the person asks for it ("show it on my desk"). The box focuses the pane itself (`agent focus`), which brings up its workspace and tab and, in a split tab, puts what the person types in that pane. When that fails, as for a pane with no agent, the box asks herdr where `pane` is (`pane get`) and focuses its workspace and its tab (`workspace focus`, `tab focus`), leaving the focus on whichever pane of the tab had it. Nothing is opened, closed or typed. It is the one call that moves the view: everything else pitupitu opens is created with `--no-focus`.
 
 - Only a herdr window open on this machine (or attached with `herdr --remote`) shows the change. With none open, herdr's focus still moves, and the next `herdr` opened here starts on that tab. With several windows attached, which ones follow is herdr's to decide; herdr does not tell the box either way.
 - herdr counts the focused pane as looked at, with or without a window attached: a turn that finishes there goes to `idle` without `done`, while its `completion_seq` still advances (`sessions.md`). The same was already true of whichever pane herdr had in front.

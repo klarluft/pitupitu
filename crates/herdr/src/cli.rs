@@ -495,6 +495,13 @@ impl AgentHost for HerdrCli {
     }
 
     async fn focus_pane(&self, pane: &PaneId) -> Result<()> {
+        // `agent focus` lands on the pane itself, so typing goes to it in
+        // a split tab too. It has no answer for a pane without an agent,
+        // and herdr has no other way to focus a pane by its id: those get
+        // the workspace and the tab, which also say when the pane is gone.
+        if self.run_json(&["agent", "focus", &pane.0]).await.is_ok() {
+            return Ok(());
+        }
         let result = self.run_json(&["pane", "get", &pane.0]).await?;
         let field = |name: &str| {
             result["pane"][name]
