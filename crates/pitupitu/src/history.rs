@@ -1820,7 +1820,7 @@ mod tests {
             ("claude", Some(s("claude", "path", "/etc/passwd"))),
             ("claude", Some(s("claude", "url", "c-42"))),
             ("claude", None),
-            ("gemini", Some(s("gemini", "id", "c-42"))),
+            ("grok", Some(s("grok", "id", "c-42"))),
             ("", None),
         ] {
             assert!(

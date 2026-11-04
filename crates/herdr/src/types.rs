@@ -35,7 +35,7 @@ impl fmt::Display for PaneId {
     }
 }
 
-/// An agent kind as herdr names it: `claude`, `codex`, `gemini`,
+/// An agent kind as herdr names it: `claude`, `codex`, `agy`,
 /// `opencode`, … pitupitu does not keep its own list; `herdr agent` prints
 /// the kinds a given herdr knows, and `agent start` rejects the rest. Only
 /// the spelling is checked here, so a misheard kind fails at herdr with its
@@ -76,7 +76,7 @@ impl std::str::FromStr for AgentKind {
             Ok(AgentKind(s))
         } else {
             Err(format!(
-                "`{s}` is not an agent kind name (claude, codex, gemini, opencode, …)"
+                "`{s}` is not an agent kind name (claude, codex, agy, opencode, …)"
             ))
         }
     }
@@ -218,7 +218,7 @@ mod agent_kind_tests {
 
     #[test]
     fn any_well_formed_kind_name_parses() {
-        for k in ["claude", "codex", "gemini", "opencode", " Codex "] {
+        for k in ["claude", "codex", "agy", "opencode", " Codex "] {
             let kind: AgentKind = k.parse().unwrap();
             assert_eq!(kind.as_str(), k.trim().to_ascii_lowercase());
         }

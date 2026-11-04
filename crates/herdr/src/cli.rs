@@ -725,11 +725,8 @@ mod kinds_tests {
 
     #[test]
     fn the_kinds_line_is_read_from_the_usage_text() {
-        let usage = "herdr agent commands:\n  herdr agent list\n  targets accept unique agent names\n  kinds: pi|claude|codex|gemini|agy\n";
-        assert_eq!(
-            parse_kinds(usage),
-            ["pi", "claude", "codex", "gemini", "agy"]
-        );
+        let usage = "herdr agent commands:\n  herdr agent list\n  targets accept unique agent names\n  kinds: pi|claude|codex|agy\n";
+        assert_eq!(parse_kinds(usage), ["pi", "claude", "codex", "agy"]);
         assert!(parse_kinds("no such line").is_empty());
     }
 }

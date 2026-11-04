@@ -44,7 +44,7 @@ The box speaks first:
  "latest": null,
  "herdr": {"version": "0.9.3", "protocol": 22, "running": true, "latest": "0.9.5",
            "restart_needed": false, "install": "installer"},
- "kinds": ["claude", "codex", "gemini", "agy", …],
+ "kinds": ["claude", "codex", "agy", …],
  "available": [{"kind": "claude", "version": "2.3.1 (Claude Code)", "command": "claude",
                 "signed_in": null, "models": null, "models_at": "2026-11-03T10:00:00Z", "models_error": null},
                {"kind": "kiro", "version": "kiro-cli 2.37.1", "command": "kiro-cli", "signed_in": true,

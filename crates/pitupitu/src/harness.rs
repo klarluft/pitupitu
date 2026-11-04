@@ -90,7 +90,6 @@ impl Profile {
                 "qwen" => "Qwen Code".into(),
                 "cline" => "Cline".into(),
                 "agy" => "Antigravity".into(),
-                "gemini" => "Gemini CLI".into(),
                 k => k.to_string(),
             })
     }
@@ -102,7 +101,6 @@ pub fn built_in() -> Vec<Profile> {
     let mut list = vec![
         p("claude", "claude", Some("claude"), Some("claude")),
         p("codex", "codex", Some("codex"), Some("codex")),
-        p("gemini", "gemini", None, None),
         p("agy", "agy", Some("agy"), Some("antigravity-cli")),
         p("opencode", "opencode", Some("opencode"), Some("opencode")),
         p("kilo", "kilo", Some("kilo"), Some("kilo")),

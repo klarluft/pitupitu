@@ -445,7 +445,7 @@ mod tests {
         let e = dispatch(
             &host,
             "create_workspace",
-            json!({"cwd": "/x", "label": "x", "kind": "gemini"}),
+            json!({"cwd": "/x", "label": "x", "kind": "grok"}),
         )
         .await
         .unwrap_err();
@@ -777,7 +777,7 @@ mod tests {
             with("boat", "w1:p1", "claude", Some("s-1")),
             with("lost", "w1:p2", "claude", Some("s-2")),
             with("bare", "w1:p3", "claude", None),
-            with("gem", "w1:p4", "gemini", Some("g-1")),
+            with("gem", "w1:p4", "grok", Some("g-1")),
         ]);
         let on = Some(home.path().to_path_buf());
         let out = last_message(&host, json!({"agent": "boat"}), on.clone())
