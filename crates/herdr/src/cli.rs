@@ -690,18 +690,26 @@ impl AgentHost for HerdrCli {
 mod kinds_tests {
     use super::parse_kinds;
 
-    /// `agent get` carries the agent's own session, which the box reads
-    /// and does not pass on.
+    /// `agent get` carries the agent's own session. The box reads it either
+    /// way; an id goes on with the agent list, a log's path never does.
     #[test]
-    fn the_agent_session_is_read_and_not_sent_on() {
-        let result = serde_json::json!({"agent": {
-            "agent": "claude", "agent_status": "idle", "pane_id": "w1:p1", "workspace_id": "w1",
-            "cwd": "/work", "agent_session": {"agent": "claude", "kind": "id",
-            "source": "herdr:claude", "value": "0f0e-1d1c"}}});
-        let info = super::agent_from(result).unwrap();
-        let s = info.agent_session.as_ref().unwrap();
+    fn an_agent_session_id_is_sent_on_and_a_path_is_not() {
+        let agent = |kind: &str, value: &str| {
+            let result = serde_json::json!({"agent": {
+                "agent": "claude", "agent_status": "idle", "pane_id": "w1:p1", "workspace_id": "w1",
+                "cwd": "/work", "agent_session": {"agent": "claude", "kind": kind,
+                "source": "herdr:claude", "value": value}}});
+            super::agent_from(result).unwrap()
+        };
+        let id = agent("id", "0f0e-1d1c");
+        let s = id.agent_session.as_ref().unwrap();
         assert_eq!((s.kind.as_str(), s.value.as_str()), ("id", "0f0e-1d1c"));
-        let sent = serde_json::to_value(&info).unwrap();
+        let sent = serde_json::to_value(&id).unwrap();
+        assert_eq!(sent["agent_session"]["value"], "0f0e-1d1c");
+
+        let path = agent("path", "/home/me/.agent/log.jsonl");
+        assert!(path.agent_session.is_some(), "still read on the box");
+        let sent = serde_json::to_value(&path).unwrap();
         assert!(sent.get("agent_session").is_none(), "{sent}");
     }
 
