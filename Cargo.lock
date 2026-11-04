@@ -940,7 +940,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pitupitu"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "pitupitu-herdr"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "async-trait",
  "libc",
