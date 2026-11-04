@@ -225,8 +225,8 @@ async fn close_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallEr
 }
 
 /// Bring a session to the front where herdr is open on this machine:
-/// focus the workspace and the tab that hold `pane`. Nothing is opened,
-/// closed or typed. `not_found` when there is no such pane (or it went
+/// focus `pane` itself, or the workspace and the tab that hold it when no
+/// agent is in it. Nothing is opened, closed or typed. `not_found` when there is no such pane (or it went
 /// away on the way).
 async fn focus_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallError> {
     host.focus_pane(pane).await.map_err(|e| match e.code() {
@@ -601,7 +601,9 @@ mod tests {
     }
 
     /// The same against a live herdr: the workspace and tab that hold the
-    /// pane come to the front, and nothing is opened or closed.
+    /// pane come to the front, and nothing is opened or closed. In a split
+    /// tab the agent's own pane gets the focus, the one a person's typing
+    /// goes to; a pane with no agent gets its tab.
     #[tokio::test]
     async fn focus_session_in_a_live_herdr() {
         let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
@@ -650,6 +652,63 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(e.code.as_deref(), Some("not_found"), "{e:?}");
+
+        // A split tab that is not in front, its second pane holding an
+        // agent: without `agent focus` the first pane keeps the focus.
+        let herdr = |args: &[&str]| {
+            let out = std::process::Command::new("herdr")
+                .args(["--session", host.session().unwrap()])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+            serde_json::from_slice::<Value>(&out.stdout).unwrap_or(Value::Null)
+        };
+        let split = host
+            .create_tab(&other.workspace_id, None, "split")
+            .await
+            .unwrap();
+        let agent_pane = herdr(&[
+            "pane",
+            "split",
+            "--pane",
+            &split.root_pane.0,
+            "--direction",
+            "right",
+            "--no-focus",
+        ]);
+        let agent_pane = agent_pane["result"]["pane"]["pane_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        herdr(&[
+            "pane",
+            "report-agent",
+            &agent_pane,
+            "--source",
+            "test",
+            "--agent",
+            "claude",
+            "--state",
+            "idle",
+        ]);
+        herdr(&["workspace", "focus", &first.workspace_id.0]);
+        dispatch(host, "focus_session", json!({"pane": agent_pane}))
+            .await
+            .unwrap();
+        let after = host.list_workspaces().await.unwrap();
+        assert_eq!(focused_ws(&after), Some(other.workspace_id.clone()));
+        assert!(pane_focused(&herdr::PaneId(agent_pane.clone())));
+        assert!(!pane_focused(&split.root_pane));
+
+        // The tab's other pane has no agent: its tab comes up all the same.
+        herdr(&["workspace", "focus", &first.workspace_id.0]);
+        dispatch(host, "focus_session", json!({"pane": second.root_pane}))
+            .await
+            .unwrap();
+        let after = host.list_workspaces().await.unwrap();
+        assert_eq!(focused_ws(&after), Some(other.workspace_id.clone()));
+        assert!(pane_focused(&second.root_pane));
     }
 
     #[tokio::test]

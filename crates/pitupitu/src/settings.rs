@@ -211,7 +211,7 @@ pub fn print(settings: &Value, as_json: bool) {
         "agent: {}{}",
         settings["default_agent"]
             .as_str()
-            .unwrap_or("auto (what the machine has, Claude first)"),
+            .unwrap_or("auto (the one the machine has; with several, pitupitu asks)"),
         if models.is_empty() {
             String::new()
         } else {
