@@ -12,9 +12,9 @@
 </p>
 
 <p align="center" id="apps">
-  <a href="https://apps.apple.com/us/app/pitupitu-chat/id6825985495"><img src="assets/app-store-badge.svg" alt="Download on the App Store" height="48"></a>
+  <a href="https://apps.apple.com/us/app/pitupitu-chat/id6825985495"><img src="assets/app-store-badge.svg" alt="Download on the App Store" width="144"></a>
   &nbsp;&nbsp;
-  <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app"><img src="assets/google-play-badge.svg" alt="Get it on Google Play" height="48"></a>
+  <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app"><img src="assets/google-play-badge.svg" alt="Get it on Google Play" width="163"></a>
 </p>
 
 <p align="center">
