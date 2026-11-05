@@ -31,6 +31,7 @@ pub fn agent(name: &str, pane: &str, status: AgentStatus, seq: u64) -> AgentInfo
         interactive_ready: true,
         terminal_title_stripped: None,
         agent_session: None,
+        background: false,
     }
 }
 

@@ -13,13 +13,13 @@ use clap::{CommandFactory, Parser, Subcommand};
 use herdr::HerdrCli;
 use pitupitu::config::Config;
 use pitupitu::{
-    config, device, herdr_box, home, inventory, link, list, mac_folders, service, sessions,
+    config, device, herdr_box, home, inventory, jobs, link, list, mac_folders, service, sessions,
     settings, skill, update,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
 #[command(
@@ -1235,6 +1235,9 @@ async fn connect(cfg: &Config) -> Result<()> {
         box_name: cfg.box_name(),
         home,
         host: Arc::new(herdr.clone()),
+        jobs: Arc::new(Mutex::new(jobs::Jobs::new(
+            herdr.session().map(str::to_string),
+        ))),
         keeper: Some(keeper),
         available,
         history: Some(config::home_dir()),

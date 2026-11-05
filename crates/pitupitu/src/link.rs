@@ -8,6 +8,7 @@ use crate::herdr_box::{self, HerdrInfo, Keeper};
 use crate::history::{self, Setting};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
+use crate::jobs::{self, Jobs};
 use crate::update::{self, Refused};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -54,6 +55,8 @@ pub struct Link {
     pub box_name: String,
     pub home: PathBuf,
     pub host: Arc<dyn AgentHost>,
+    /// Jobs the agents left running, known across reconnects.
+    pub jobs: Arc<Mutex<Jobs>>,
     /// herdr itself: its status, its server, its updates. `None` when a
     /// test stands in for herdr; the inventory's `herdr` is then null.
     pub keeper: Option<Arc<Keeper>>,
@@ -189,13 +192,14 @@ impl Link {
         if let Some(k) = &self.keeper {
             k.ensure(&*self.host).await;
         }
-        let (agents, herdr_up) = match self.host.list_agents().await {
+        let (mut agents, herdr_up) = match self.host.list_agents().await {
             Ok(a) => (a, true),
             Err(e) => {
                 warn!("agent list: {e}");
                 (Vec::new(), false)
             }
         };
+        jobs::update(&self.jobs, &mut agents).await;
         if self.updates && self.releases.lock().unwrap().due() {
             let asked = Releases::ask().await;
             *self.releases.lock().unwrap() = asked;
@@ -258,6 +262,7 @@ impl Link {
         let poller = tokio::spawn(poll(
             Polled {
                 host: self.host.clone(),
+                jobs: self.jobs.clone(),
                 keeper: self.keeper.clone(),
                 home_dir: self.home.clone(),
                 history: self.history.clone(),
@@ -535,7 +540,7 @@ impl Drop for AbortOnDrop {
 
 /// What decides whether a new `agents` note is due: the set of panes and
 /// each one's status and counters.
-type Signature = Vec<(String, String, u64, Option<u64>)>;
+type Signature = Vec<(String, String, u64, Option<u64>, bool)>;
 
 fn signature(agents: &[AgentInfo]) -> Signature {
     let mut sig: Signature = agents
@@ -546,6 +551,7 @@ fn signature(agents: &[AgentInfo]) -> Signature {
                 a.agent_status.as_str().to_string(),
                 a.state_change_seq,
                 a.completion_seq,
+                a.background,
             )
         })
         .collect();
@@ -556,6 +562,7 @@ fn signature(agents: &[AgentInfo]) -> Signature {
 /// What the poller looks at.
 struct Polled {
     host: Arc<dyn AgentHost>,
+    jobs: Arc<Mutex<Jobs>>,
     keeper: Option<Arc<Keeper>>,
     home_dir: PathBuf,
     history: Option<PathBuf>,
@@ -702,7 +709,8 @@ async fn poll(
             }
         }
         match listed {
-            Ok(agents) => {
+            Ok(mut agents) => {
+                jobs::update(&p.jobs, &mut agents).await;
                 let sig = signature(&agents);
                 if sig != last_agents {
                     last_agents = sig;
@@ -774,6 +782,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_job_ending_is_news_to_the_cloud() {
+        let mut a = crate::testhost::agent("a", "w1:p1", herdr::AgentStatus::Done, 3);
+        let before = signature(std::slice::from_ref(&a));
+        a.background = true;
+        assert_ne!(before, signature(std::slice::from_ref(&a)));
+    }
+
     fn link(url: String, host: FakeHost, home: PathBuf) -> Link {
         Link {
             url,
@@ -781,6 +797,7 @@ mod tests {
             box_name: "testbox".into(),
             home: home.clone(),
             host: Arc::new(host),
+            jobs: Arc::new(Mutex::new(Jobs::reading(None, |_| Vec::new()))),
             keeper: None,
             available: vec![Available {
                 kind: "claude".into(),
