@@ -25,7 +25,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 /// The box link protocol this box speaks.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// How often the agent list and the home folder are looked at.
 const POLL: Duration = Duration::from_secs(1);
@@ -539,8 +539,10 @@ impl Drop for AbortOnDrop {
 }
 
 /// What decides whether a new `agents` note is due: the set of panes and
-/// each one's status and counters.
-type Signature = Vec<(String, String, u64, Option<u64>, bool)>;
+/// each one's status, counters, whether a job is left running, and agent
+/// session (herdr's integration can report it after the pane's last state
+/// change, and a session can change in a pane that stays idle).
+type Signature = Vec<(String, String, u64, Option<u64>, bool, Option<String>)>;
 
 fn signature(agents: &[AgentInfo]) -> Signature {
     let mut sig: Signature = agents
@@ -552,6 +554,7 @@ fn signature(agents: &[AgentInfo]) -> Signature {
                 a.state_change_seq,
                 a.completion_seq,
                 a.background,
+                a.agent_session.as_ref().map(|s| s.value.clone()),
             )
         })
         .collect();
@@ -832,7 +835,7 @@ mod tests {
 
         let hello = next_json(&mut ws).await;
         assert_eq!(hello["note"], "hello");
-        assert_eq!(hello["protocol"], 9);
+        assert_eq!(hello["protocol"], 10);
         assert_eq!(hello["box"], "testbox");
         assert_eq!(hello["herdr"], Value::Null);
         assert!(hello.get("driver").is_none());
@@ -883,6 +886,22 @@ mod tests {
         let note = next_json(&mut ws).await;
         assert_eq!(note["note"], "agents");
         assert_eq!(note["agents"][0]["agent_status"], "done");
+        assert!(note["agents"][0].get("agent_session").is_none());
+
+        // Herdr learning the pane's session is a change too,
+        // though the pane's state did not move.
+        host.agents.lock().unwrap()[0].agent_session = Some(herdr::AgentSession {
+            agent: "claude".into(),
+            kind: "id".into(),
+            value: "s-9".into(),
+        });
+        let note = next_json(&mut ws).await;
+        assert_eq!(note["note"], "agents");
+        assert_eq!(
+            note["agents"][0]["agent_session"],
+            json!({"agent": "claude", "kind": "id", "value": "s-9"})
+        );
+
         std::fs::create_dir_all(dir.path().join("skills/deploy")).unwrap();
         std::fs::write(dir.path().join("skills/deploy/SKILL.md"), "Deploy steps.").unwrap();
         let note = next_json(&mut ws).await;

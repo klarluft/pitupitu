@@ -27,7 +27,6 @@ pub const HISTORY_OFF_SAYS: &str = "pitupitu will no longer read what your agent
 pub const AGENT_KINDS: &[&str] = &[
     "claude",
     "codex",
-    "gemini",
     "agy",
     "opencode",
     "kilo",
@@ -54,7 +53,6 @@ pub const AGENT_KINDS: &[&str] = &[
 pub const AGENTS: &[&str] = &[
     "claude",
     "codex",
-    "gemini",
     "agy",
     "opencode",
     "kilo",
@@ -369,7 +367,7 @@ mod tests {
 
     #[test]
     fn setup_asks_for_a_default_agent_only_when_there_is_a_choice() {
-        let both = ["claude", "gemini", "codex"];
+        let both = ["claude", "pi", "codex"];
         assert!(ask_default_agent(true, &both, &Value::Null));
         assert!(!ask_default_agent(false, &both, &Value::Null));
         assert!(!ask_default_agent(true, &both, &json!("codex")));
@@ -394,6 +392,6 @@ mod tests {
         assert_eq!(default_agent_answer("kiro", &options), Some(Some("kiro")));
         assert_eq!(default_agent_answer("3", &options), None);
         assert_eq!(default_agent_answer("0", &options), None);
-        assert_eq!(default_agent_answer("gemini", &options), None);
+        assert_eq!(default_agent_answer("pi", &options), None);
     }
 }

@@ -1,7 +1,8 @@
 //! The logs of the harnesses besides Claude Code and Codex: Kiro CLI, pi
 //! and Qwen Code (JSONL, read on line by line as Claude Code's and Codex's
 //! are), Cline (one JSON document it rewrites, read whole), OpenCode and
-//! Kilo Code (a SQLite database, a session read whole). Each gives the
+//! Kilo Code (a SQLite database, a session read whole), Antigravity and
+//! Maki (JSONL, read whole each time). Each gives the
 //! same turns: what the person typed, the agent's text, and a tool call's
 //! name and one target. Never thinking, tool results or file contents.
 
@@ -62,6 +63,51 @@ fn cline_target(name: &str, input: &Value) -> Option<String> {
         return first.and_then(|c| one_line(&c, TARGET_MAX));
     }
     target(name, input)
+}
+
+/// What the person typed, as Antigravity logs it: inside `<USER_REQUEST>`,
+/// with the metadata it adds after that.
+fn agy_you(text: &str) -> Option<String> {
+    const OPEN: &str = "<USER_REQUEST>";
+    let inner = match text.find(OPEN) {
+        Some(i) => {
+            let rest = &text[i + OPEN.len()..];
+            rest.find("</USER_REQUEST>")
+                .map_or(rest, |end| &rest[..end])
+        }
+        None => {
+            let added = ["<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>"]
+                .iter()
+                .filter_map(|t| text.find(t))
+                .min();
+            added.map_or(text, |end| &text[..end])
+        }
+    };
+    Some(inner.trim().to_string())
+}
+
+/// An Antigravity tool call's target, from the arguments that name a file,
+/// a command or a search; any other argument can hold file contents
+/// (`Content`, `Replacement`, `Target`) and is left alone.
+fn agy_target(args: &Value) -> Option<String> {
+    ["Path", "CommandLine", "query"]
+        .iter()
+        .find_map(|k| args[*k].as_str())
+        .and_then(|s| one_line(s, TARGET_MAX))
+}
+
+/// Maki's title for a session it has not titled yet.
+const MAKI_NO_TITLE: &str = "New session";
+/// What Maki writes in place of a reply that came back empty.
+const MAKI_EMPTY: &str = "(empty)";
+
+/// Whether a line of a Maki log is one the reader looks at: not tool
+/// output (`out`), a subagent's message (`sub_msg`) or the system prompt
+/// (`frame`).
+pub(super) fn maki_reads(line: &str) -> bool {
+    ["header", "msg", "meta"]
+        .iter()
+        .any(|t| line.starts_with(&format!(r#"{{"t":"{t}""#)))
 }
 
 /// OpenCode's title for a session it has not titled yet.
@@ -204,6 +250,107 @@ impl Parsed {
                 let name = call["name"].as_str().unwrap_or("tool");
                 self.tool(&at, name, target(name, &call["args"]));
             }
+        }
+    }
+
+    /// A line of Antigravity's `transcript.jsonl`: what the person typed
+    /// (`USER_INPUT` from `USER_EXPLICIT`), the agent's `content` and
+    /// `tool_calls` (`PLANNER_RESPONSE`). `thinking`, tool results
+    /// (`GENERIC`) and Antigravity's own messages are skipped.
+    pub(super) fn agy(&mut self, v: &Value) {
+        let at = v["created_at"].as_str().unwrap_or_default().to_string();
+        match v["type"].as_str().unwrap_or_default() {
+            "USER_INPUT" if v["source"] == "USER_EXPLICIT" => {
+                self.you(&at, v["content"].as_str().and_then(agy_you));
+            }
+            "PLANNER_RESPONSE" => {
+                if let Some(text) = v["content"].as_str() {
+                    self.said(&at, text);
+                }
+                for call in v["tool_calls"].as_array().into_iter().flatten() {
+                    let name = call["name"].as_str().unwrap_or("tool");
+                    self.tool(&at, name, agy_target(&call["args"]));
+                }
+            }
+            _ => return,
+        }
+        self.meta(None, None, Some(&at));
+    }
+
+    /// The conversation's id, from the transcript's folder, and its folder
+    /// and title from Antigravity's summaries.
+    pub(super) fn agy_session(&mut self, transcript: &Path) {
+        self.meta(logs::agy_id(transcript).as_deref(), None, None);
+        if let Some(m) = logs::agy_meta(transcript) {
+            self.meta(None, m.cwd.as_deref(), None);
+            if let Some(t) = m.title.as_deref().and_then(title_of) {
+                self.title = Some(t);
+            }
+        }
+    }
+
+    /// A line of a Maki session: the `header` (folder, start), `meta`
+    /// records (title, last written; the last one counts) and `msg`
+    /// records. Of those only `turn`s: the host's observations and context
+    /// updates are skipped, as are prompts it made up (an empty
+    /// `display_text`). The person's words are `display_text`, else the
+    /// `text` blocks; the agent's are `text` and `tool_use` blocks, not
+    /// `thinking`, and tool results are not read. Maki's messages carry no
+    /// time, so a turn has the last time the log gave before it. The id is
+    /// the file's name, the spelling `maki --resume` takes.
+    pub(super) fn maki(&mut self, v: &Value) {
+        let at_of = |key: &str| {
+            v[key]
+                .as_u64()
+                .filter(|s| *s > 0)
+                .map(|s| rfc3339_ms(s * 1000))
+        };
+        match v["t"].as_str().unwrap_or_default() {
+            "header" => self.meta(None, v["cwd"].as_str(), at_of("created_at").as_deref()),
+            "meta" => {
+                self.meta(None, None, at_of("updated_at").as_deref());
+                let title = v["title"].as_str().filter(|t| *t != MAKI_NO_TITLE);
+                if let Some(t) = title.and_then(title_of) {
+                    self.title = Some(t);
+                }
+            }
+            "msg" => {
+                let d = &v["d"];
+                if !(d["kind"].is_null() || d["kind"] == "turn") {
+                    return;
+                }
+                let at = self.last_at.clone().unwrap_or_default();
+                let blocks = d["content"].as_array().into_iter().flatten();
+                match d["role"].as_str().unwrap_or_default() {
+                    "user" => match d["display_text"].as_str() {
+                        Some(shown) => self.you(&at, Some(shown.to_string())),
+                        None => {
+                            for t in texts(&d["content"]) {
+                                self.you(&at, Some(t.to_string()));
+                            }
+                        }
+                    },
+                    "assistant" => {
+                        for b in blocks {
+                            match b["type"].as_str() {
+                                Some("text") => {
+                                    if let Some(s) = b["text"].as_str().filter(|s| *s != MAKI_EMPTY)
+                                    {
+                                        self.said(&at, s);
+                                    }
+                                }
+                                Some("tool_use") => {
+                                    let name = b["name"].as_str().unwrap_or("tool");
+                                    self.tool(&at, name, target(name, &b["input"]));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
     }
 
@@ -361,6 +508,226 @@ mod tests {
         let mut p = Parsed::new(agent);
         p.load(path).unwrap();
         p
+    }
+
+    /// An Antigravity conversation of two prompts. Invented throughout, in
+    /// the shape of real transcripts.
+    fn agy_log() -> String {
+        let step = |i: u32, ty: &str, source: &str, rest: Value| {
+            let mut v = json!({"step_index": i, "type": ty, "source": source, "status": "DONE",
+                "created_at": format!("2026-10-12T10:00:{i:02}Z")});
+            if let (Value::Object(v), Value::Object(r)) = (&mut v, rest) {
+                v.extend(r);
+            }
+            v
+        };
+        let meta = "<ADDITIONAL_METADATA>\nADDED CONTEXT\n</ADDITIONAL_METADATA>";
+        lines(&[
+            step(
+                0,
+                "USER_INPUT",
+                "USER_EXPLICIT",
+                json!({"content":
+                format!("<USER_REQUEST>\nWater the ferns, key=sk-abcdefghijklmnop1234\n</USER_REQUEST>\n{meta}\n<USER_SETTINGS_CHANGE>ADDED CONTEXT</USER_SETTINGS_CHANGE>")}),
+            ),
+            step(
+                1,
+                "SYSTEM_MESSAGE",
+                "SYSTEM",
+                json!({"content": "SYSTEM PROMPT"}),
+            ),
+            step(
+                2,
+                "PLANNER_RESPONSE",
+                "MODEL",
+                json!({"thinking": "MUSING", "tool_calls": [
+                    {"name": "run_command", "args": {"CommandLine": "ls ferns", "WaitMsBeforeAsync": 500, "toolSummary": "List"}},
+                    {"name": "read_file", "args": {"Path": "/garden/ferns.md"}},
+                    {"name": "write_file", "args": {"Content": "FILE BODY", "Path": "/garden/log.md"}},
+                    {"name": "edit_file", "args": {"Path": "/garden/a.md", "Replacement": "FILE BODY", "Target": "FILE BODY"}},
+                    {"name": "search_web", "args": {"domain": "", "query": "fern care"}},
+                    {"name": "ask_question", "args": {"questions": [{"text": "ADDED CONTEXT"}]}}
+                ]}),
+            ),
+            step(
+                3,
+                "GENERIC",
+                "MODEL",
+                json!({"content": "TOOL OUTPUT", "truncated_fields": ["content"]}),
+            ),
+            step(
+                4,
+                "PLANNER_RESPONSE",
+                "MODEL",
+                json!({"thinking": "MUSING", "content": "The ferns are watered."}),
+            ),
+            step(
+                5,
+                "ERROR_MESSAGE",
+                "SYSTEM",
+                json!({"content": "TOOL OUTPUT", "error": "TOOL OUTPUT"}),
+            ),
+            step(
+                6,
+                "USER_INPUT",
+                "USER_EXPLICIT",
+                json!({"content": format!("<USER_REQUEST>Thanks</USER_REQUEST>{meta}")}),
+            ),
+            step(
+                7,
+                "PLANNER_RESPONSE",
+                "MODEL",
+                json!({"content": "Glad to help."}),
+            ),
+        ])
+    }
+
+    #[test]
+    fn an_antigravity_conversation_becomes_turns() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "0a1b2c3d-1111-4222-8333-444455556666";
+        logs::tests::make_agy_summaries(
+            &home.path().join(".gemini/antigravity-cli"),
+            &[(id, "Water the ferns", r#"["file:///garden"]"#, "", 0)],
+        );
+        let log = put(
+            home.path(),
+            &format!(".gemini/antigravity-cli/brain/{id}/.system_generated/logs/transcript.jsonl"),
+            &agy_log(),
+        );
+        let p = read("agy", &log);
+        assert_eq!(p.id.as_deref(), Some(id));
+        assert_eq!(p.cwd.as_deref(), Some("/garden"));
+        assert_eq!(p.title.as_deref(), Some("Water the ferns"));
+        assert_eq!(p.started_at.as_deref(), Some("2026-10-12T10:00:00Z"));
+        assert_eq!(p.last_at.as_deref(), Some("2026-10-12T10:00:07Z"));
+        assert_eq!(
+            turns(&p),
+            [
+                "you: Water the ferns, key=[redacted]",
+                "tool: run_command ls ferns",
+                "tool: read_file /garden/ferns.md",
+                "tool: write_file /garden/log.md",
+                "tool: edit_file /garden/a.md",
+                "tool: search_web fern care",
+                "tool: ask_question -",
+                "agent: The ferns are watered.",
+                "you: Thanks",
+                "agent: Glad to help.",
+            ]
+        );
+        never_sent(&p);
+        let r = last_reply(&log, "agy").unwrap();
+        assert_eq!((r.text.as_str(), r.turn), ("Glad to help.", 2));
+        let session = herdr::AgentSession {
+            agent: "agy".into(),
+            kind: "id".into(),
+            value: id.into(),
+        };
+        assert_eq!(
+            find_log(home.path(), "agy", Some(&session), Path::new("/garden")),
+            Ok((log, "agy"))
+        );
+    }
+
+    #[test]
+    fn what_antigravity_adds_to_a_prompt_is_not_what_was_typed() {
+        assert_eq!(agy_you("plain words").as_deref(), Some("plain words"));
+        assert_eq!(
+            agy_you("no tag <ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>").as_deref(),
+            Some("no tag")
+        );
+        assert_eq!(
+            agy_you("<USER_REQUEST>not closed").as_deref(),
+            Some("not closed")
+        );
+    }
+
+    /// A Maki session, invented, in the record shapes of Maki's source and
+    /// its own test fixture; never checked against a file Maki wrote.
+    fn maki_log() -> String {
+        let msg = |d: Value| json!({"t": "msg", "d": d});
+        lines(&[
+            json!({"t": "header", "v": 3, "id": "3vQB7B6MrGQZaxCuFg4oh", "model": "x/y",
+                   "cwd": "/meadow", "created_at": 1_791_800_000u64}),
+            json!({"t": "frame", "d": {"system": "SYSTEM PROMPT"}}),
+            msg(
+                json!({"role": "user", "kind": "context_update", "facts": {"date": "2026-10-12"},
+                       "content": [{"type": "text", "text": "ADDED CONTEXT"}]}),
+            ),
+            msg(
+                json!({"role": "user", "kind": {"context_update": {"date": "2026-10-12"}},
+                       "content": [{"type": "text", "text": "ADDED CONTEXT"}]}),
+            ),
+            msg(json!({"role": "user", "kind": "observation",
+                       "content": [{"type": "text", "text": "ADDED CONTEXT"}]})),
+            msg(json!({"role": "user", "display_text": "",
+                       "content": [{"type": "text", "text": "ADDED CONTEXT"}]})),
+            msg(json!({"role": "user", "content": [{"type": "text", "text": "Mow the meadow"}]})),
+            json!({"t": "meta", "title": "New session", "token_usage": null, "updated_at": 1_791_800_010u64}),
+            msg(json!({"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "MUSING"},
+                {"type": "redacted_thinking", "data": "MUSING"},
+                {"type": "text", "text": "Mowing."},
+                {"type": "tool_use", "id": "k1", "name": "bash", "input": {"command": "mow --all"}},
+                {"type": "tool_use", "id": "k2", "name": "write", "input": {"path": "/meadow/log.md", "content": "FILE BODY"}},
+                {"type": "server_tool_use", "id": "k3", "name": "web_search", "input": {"query": "MEMORY"}}
+            ]})),
+            msg(json!({"role": "user", "display_text": "", "content": [
+                {"type": "tool_result", "tool_use_id": "k1", "content": "TOOL OUTPUT"}]})),
+            json!({"t": "out", "id": "k1", "d": {"text": "TOOL OUTPUT"}}),
+            json!({"t": "sub_msg", "sub": "s1", "d": {"role": "user", "content": [{"type": "text", "text": "MEMORY"}]}}),
+            msg(json!({"role": "assistant", "content": [{"type": "text", "text": "(empty)"}]})),
+            msg(
+                json!({"role": "user", "display_text": "Now the verge", "content": [
+                {"type": "text", "text": "Now the verge ADDED CONTEXT"}]}),
+            ),
+            msg(json!({"role": "assistant", "content": [{"type": "text", "text": "Done."}]})),
+            json!({"t": "meta", "title": "Mowing the meadow", "token_usage": null, "updated_at": 1_791_800_020u64}),
+        ])
+    }
+
+    #[test]
+    fn a_maki_session_becomes_turns() {
+        let home = tempfile::tempdir().unwrap();
+        let log = put(
+            home.path(),
+            ".local/state/maki/sessions/3vQB7B6MrGQZaxCuFg4oh.jsonl",
+            &maki_log(),
+        );
+        let p = read("maki", &log);
+        // The file's name gives the id.
+        assert_eq!(p.id, None);
+        assert_eq!(p.cwd.as_deref(), Some("/meadow"));
+        assert_eq!(p.title.as_deref(), Some("Mowing the meadow"));
+        assert_eq!(p.started_at, Some(rfc3339_ms(1_791_800_000_000)));
+        assert_eq!(p.last_at, Some(rfc3339_ms(1_791_800_020_000)));
+        assert_eq!(
+            turns(&p),
+            [
+                "you: Mow the meadow",
+                "agent: Mowing.",
+                "tool: bash mow --all",
+                "tool: write /meadow/log.md",
+                "you: Now the verge",
+                "agent: Done.",
+            ]
+        );
+        assert_eq!(p.turns[1].at, rfc3339_ms(1_791_800_010_000));
+        never_sent(&p);
+        let r = last_reply(&log, "maki").unwrap();
+        assert_eq!((r.text.as_str(), r.turn), ("Done.", 2));
+        let found = logs::list(home.path()).remove(0);
+        assert_eq!(logs::cwd_of(&found).as_deref(), Some(Path::new("/meadow")));
+        let session = herdr::AgentSession {
+            agent: "maki".into(),
+            kind: "id".into(),
+            value: "3vQB7B6MrGQZaxCuFg4oh".into(),
+        };
+        assert_eq!(
+            find_log(home.path(), "maki", Some(&session), Path::new("/meadow")),
+            Ok((log, "maki"))
+        );
     }
 
     fn kiro_log() -> String {
@@ -865,6 +1232,27 @@ mod tests {
             &qwen_log().replace("/meadow", w),
         );
         cline_session(h, "1791000000000_abcde", w);
+        let agy = "0a1b2c3d-1111-4222-8333-444455556666";
+        logs::tests::make_agy_summaries(
+            &h.join(".gemini/antigravity-cli"),
+            &[(
+                agy,
+                "Water",
+                &json!([format!("file://{w}")]).to_string(),
+                "",
+                0,
+            )],
+        );
+        put(
+            h,
+            &format!(".gemini/antigravity-cli/brain/{agy}/.system_generated/logs/transcript.jsonl"),
+            &agy_log(),
+        );
+        put(
+            h,
+            ".local/state/maki/sessions/3vQB7B6MrGQZaxCuFg4oh.jsonl",
+            &maki_log().replace("/meadow", w),
+        );
         let db = opencode_db(h, ".local/share/kilo/kilo.db", w);
         // Written just now, as a live session would be.
         let now = unix(SystemTime::now()) as i64;
@@ -894,9 +1282,11 @@ mod tests {
         assert_eq!(
             agents,
             [
+                ("agy".into(), agy.into()),
                 ("cline".into(), "1791000000000_abcde".into()),
                 ("kilo".into(), "ses_o1".into()),
                 ("kiro".into(), "sess_k-1".into()),
+                ("maki".into(), "3vQB7B6MrGQZaxCuFg4oh".into()),
                 ("pi".into(), "p-1".into()),
                 ("qwen".into(), "q-1".into()),
             ]

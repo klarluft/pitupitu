@@ -35,7 +35,7 @@ impl fmt::Display for PaneId {
     }
 }
 
-/// An agent kind as herdr names it: `claude`, `codex`, `gemini`,
+/// An agent kind as herdr names it: `claude`, `codex`, `agy`,
 /// `opencode`, … pitupitu does not keep its own list; `herdr agent` prints
 /// the kinds a given herdr knows, and `agent start` rejects the rest. Only
 /// the spelling is checked here, so a misheard kind fails at herdr with its
@@ -76,7 +76,7 @@ impl std::str::FromStr for AgentKind {
             Ok(AgentKind(s))
         } else {
             Err(format!(
-                "`{s}` is not an agent kind name (claude, codex, gemini, opencode, …)"
+                "`{s}` is not an agent kind name (claude, codex, agy, opencode, …)"
             ))
         }
     }
@@ -149,19 +149,15 @@ pub struct AgentInfo {
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
     /// Which of the agent's own sessions runs in the pane, as herdr's
-    /// integration reports it. Read on the box to find the agent's log
-    /// (`last_message`). An id is sent with the agent list, so the cloud can
-    /// tell which session a pane holds; a path never is.
-    #[serde(default, skip_serializing_if = "no_session_id")]
+    /// integration reports it. The box finds the agent's log with it
+    /// (`last_message`) and sends it on, so the cloud can resume the session
+    /// after its pane closed: the id or the log's path, nothing from inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<AgentSession>,
     /// Back at its prompt with a job still running. Never from herdr: the
     /// box agent sets it from the pane's processes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
-}
-
-fn no_session_id(session: &Option<AgentSession>) -> bool {
-    session.as_ref().is_none_or(|s| s.kind != "id")
 }
 
 /// herdr's `agent_session`: the agent's own session, by id (Claude Code's
@@ -222,7 +218,7 @@ mod agent_kind_tests {
 
     #[test]
     fn any_well_formed_kind_name_parses() {
-        for k in ["claude", "codex", "gemini", "opencode", " Codex "] {
+        for k in ["claude", "codex", "agy", "opencode", " Codex "] {
             let kind: AgentKind = k.parse().unwrap();
             assert_eq!(kind.as_str(), k.trim().to_ascii_lowercase());
         }
