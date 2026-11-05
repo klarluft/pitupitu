@@ -224,6 +224,18 @@ async fn close_session(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallEr
     host.close_tab(&tab).await.map_err(gone)
 }
 
+/// Stop a session that shares its tab: close `pane` alone, and the tab
+/// stays with the others in it. herdr closes the tab with its last pane.
+/// `not_found` when there is no such pane.
+async fn close_pane(host: &dyn AgentHost, pane: &PaneId) -> Result<(), CallError> {
+    host.close_pane(pane).await.map_err(|e| match e.code() {
+        Some("pane_not_found") => {
+            CallError::api("not_found", format!("no pane {pane} on this box"))
+        }
+        _ => CallError::from(e),
+    })
+}
+
 /// Bring a session to the front where herdr is open on this machine:
 /// focus `pane` itself, or the workspace and the tab that hold it when no
 /// agent is in it. Nothing is opened, closed or typed. `not_found` when there is no such pane (or it went
@@ -325,6 +337,10 @@ pub async fn dispatch(host: &dyn AgentHost, call: &str, a: Value) -> Result<Valu
         "close_session" => {
             let a: Pane = args(call, a)?;
             ok(close_session(host, &a.pane).await?)
+        }
+        "close_pane" => {
+            let a: Pane = args(call, a)?;
+            ok(close_pane(host, &a.pane).await?)
         }
         "focus_session" => {
             let a: Pane = args(call, a)?;
@@ -429,7 +445,7 @@ mod tests {
         let e = dispatch(
             &host,
             "create_workspace",
-            json!({"cwd": "/x", "label": "x", "kind": "gemini"}),
+            json!({"cwd": "/x", "label": "x", "kind": "grok"}),
         )
         .await
         .unwrap_err();
@@ -522,6 +538,23 @@ mod tests {
             .unwrap();
         // ...and herdr closes the workspace with its last tab.
         assert!(host.list_workspaces().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_pane_closes_that_pane_and_not_its_tab() {
+        let host = FakeHost::default();
+        assert_eq!(
+            dispatch(&host, "close_pane", json!({"pane": "w3:p2"})).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(host.log(), ["close_pane w3:p2"]);
+        let e = dispatch(&host, "close_pane", json!({"pane": "w404:p1"}))
+            .await
+            .unwrap_err();
+        assert_eq!((e.kind, e.code.as_deref()), ("api", Some("not_found")));
+        let e = dispatch(&host, "close_pane", json!({})).await.unwrap_err();
+        assert_eq!(e.kind, "bad_call");
+        assert_eq!(host.log().len(), 1);
     }
 
     #[tokio::test]
@@ -744,7 +777,7 @@ mod tests {
             with("boat", "w1:p1", "claude", Some("s-1")),
             with("lost", "w1:p2", "claude", Some("s-2")),
             with("bare", "w1:p3", "claude", None),
-            with("gem", "w1:p4", "gemini", Some("g-1")),
+            with("gem", "w1:p4", "grok", Some("g-1")),
         ]);
         let on = Some(home.path().to_path_buf());
         let out = last_message(&host, json!({"agent": "boat"}), on.clone())

@@ -7,7 +7,8 @@
 //!
 //! Read: the agents' own session logs, the ones `logs.rs` lists and
 //! `recent` looks at: Claude Code's and Codex's here, Kiro CLI's, pi's,
-//! Qwen Code's, Cline's, OpenCode's and Kilo Code's in `harnesses.rs`.
+//! Qwen Code's, Cline's, OpenCode's, Kilo Code's, Antigravity's and Maki's
+//! in `harnesses.rs`.
 //! Sent, per session: the folder, the repository it is in, when it ran, a
 //! title, and its turns: what the person typed, what the agent answered,
 //! and for each tool call its name and one target (a file path, the start
@@ -600,6 +601,11 @@ impl Parsed {
                 self.kiro_session(path);
                 Ok(())
             }
+            "agy" => {
+                self.read(path)?;
+                self.agy_session(path);
+                Ok(())
+            }
             _ => self.read(path),
         }
     }
@@ -614,6 +620,10 @@ impl Parsed {
         {
             return;
         }
+        // Most of a Maki log is tool output, which is not even parsed.
+        if self.agent == "maki" && !harnesses::maki_reads(line) {
+            return;
+        }
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return;
         };
@@ -623,6 +633,8 @@ impl Parsed {
             "kiro" => self.kiro(&v),
             "pi" => self.pi(&v),
             "qwen" => self.qwen(&v),
+            "agy" => self.agy(&v),
+            "maki" => self.maki(&v),
             _ => {}
         }
     }
@@ -1120,8 +1132,9 @@ impl Reader {
     /// `None` for a log with no turns or no folder.
     fn session(&mut self, log: &Log, now: u64) -> Option<Session> {
         // Logs only appended to are read on from where they were left;
-        // Cline's (rewritten) and a database's are read whole.
-        let appended = !matches!(log.agent, "cline" | "opencode" | "kilo");
+        // Cline's, Maki's and Antigravity's (rewritten, or not known to be
+        // only appended to) and a database's are read whole.
+        let appended = !matches!(log.agent, "cline" | "opencode" | "kilo" | "agy" | "maki");
         let mut p = self
             .open
             .remove(&log.path)
@@ -1471,7 +1484,7 @@ fn safe_id(id: &str) -> bool {
 
 /// The agents whose logs the box reads, by herdr's names for them.
 const READ: &[&str] = &[
-    "claude", "codex", "kiro", "pi", "qwen", "cline", "opencode", "kilo",
+    "claude", "codex", "kiro", "pi", "qwen", "cline", "opencode", "kilo", "agy", "maki",
 ];
 
 /// For an agent herdr reports no session for, a log of that agent in the
@@ -1487,7 +1500,8 @@ fn is_session(log: &logs::LogRef, id: &str) -> bool {
         .unwrap_or_default();
     let stem = name.split_once('.').map_or(name.as_ref(), |(s, _)| s);
     match log.agent {
-        "claude" | "qwen" => stem == id,
+        "claude" | "qwen" | "maki" => stem == id,
+        "agy" => logs::agy_id(&log.path).as_deref() == Some(id),
         "codex" => stem.ends_with(&format!("-{id}")),
         "pi" => stem.ends_with(&format!("_{id}")),
         "cline" => name == format!("{id}.messages.json"),
@@ -1820,7 +1834,7 @@ mod tests {
             ("claude", Some(s("claude", "path", "/etc/passwd"))),
             ("claude", Some(s("claude", "url", "c-42"))),
             ("claude", None),
-            ("gemini", Some(s("gemini", "id", "c-42"))),
+            ("grok", Some(s("grok", "id", "c-42"))),
             ("", None),
         ] {
             assert!(

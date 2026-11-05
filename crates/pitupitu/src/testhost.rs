@@ -95,6 +95,18 @@ impl AgentHost for FakeHost {
         Ok(())
     }
 
+    /// A pane of `w404` does not exist.
+    async fn close_pane(&self, pane: &PaneId) -> Result<()> {
+        if pane.0.starts_with("w404:") {
+            return Err(herdr::Error::Api {
+                code: "pane_not_found".into(),
+                message: format!("pane {pane} not found"),
+            });
+        }
+        self.note(format!("close_pane {pane}"));
+        Ok(())
+    }
+
     /// `wN:pM` lives in tab `wN:tM`; a pane of `w404` does not exist.
     async fn pane_tab(&self, pane: &PaneId) -> Result<TabId> {
         match pane.0.split_once(":p") {
