@@ -154,6 +154,10 @@ pub struct AgentInfo {
     /// tell which session a pane holds; a path never is.
     #[serde(default, skip_serializing_if = "no_session_id")]
     pub agent_session: Option<AgentSession>,
+    /// Back at its prompt with a job still running. Never from herdr: the
+    /// box agent sets it from the pane's processes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
 }
 
 fn no_session_id(session: &Option<AgentSession>) -> bool {

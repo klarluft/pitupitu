@@ -9,6 +9,7 @@ pub mod herdr_box;
 pub mod history;
 pub mod home;
 pub mod inventory;
+pub mod jobs;
 pub mod link;
 pub mod list;
 pub(crate) mod logs;
