@@ -1,6 +1,6 @@
 # Box link protocol
 
-The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **7** (the cloud also accepts 6).
+The box link is the one connection between this agent and pitupitu cloud. The box dials out; nothing connects in. This is protocol version **9** (the cloud also accepts 8).
 
 ## Connecting
 
@@ -38,7 +38,7 @@ Calls may overlap: each runs on its own task and replies come back in any order.
 The box speaks first:
 
 ```json
-{"note": "hello", "protocol": 8, "version": "0.11.0", "box": "my-laptop", "home": "/home/me/pitupitu",
+{"note": "hello", "protocol": 9, "version": "0.11.0", "box": "my-laptop", "home": "/home/me/pitupitu",
  "agents": [<AgentInfo>…],
  "install": "installer",
  "latest": null,
@@ -62,7 +62,7 @@ then a `home` note. Before `hello` the cloud sends nothing; right after it, the 
 - `available`: the coding agents ("harnesses") found on `PATH`, one per profile ("Harnesses", below) whose `command` answers `--version`, with the first line it printed, and what the harness's lister last said: `signed_in` (`null` when the harness cannot say), `models` (`null` when not listed: no lister, signed out, or the lister failed, `models_error` saying which, in plain words), and `models_at`, when the lister ran. The box never reads an agent's credentials to tell whether it is signed in; only a lister that asks the agent itself (Kiro CLI's `whoami`) says so.
 - `recent`: up to 30 project folders, newest first, that still exist: the working directory of recent sessions in Claude Code's `~/.claude/projects/*/*.jsonl` and Codex's `~/.codex/sessions/**/*.jsonl`, and when the session file was last written. Only the folder path is read from those files.
 
-Protocol 7 had the same `hello` with `available` holding `kind` and `version` only, for five kinds (`claude`, `codex`, `gemini`, `agy`, `opencode`), no `harnesses` note and no `refresh_models`. Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
+Protocol 8 had the same `hello` and every call but `close_pane`. Protocol 7 had the same `hello` with `available` holding `kind` and `version` only, for five kinds (`claude`, `codex`, `gemini`, `agy`, `opencode`), no `harnesses` note and no `refresh_models`. Protocol 6 had the same `hello` and every call but `last_message`. Protocol 5 (0.7 and 0.8) had neither `last_message` nor `focus_session`. Protocol 4 (0.6) had neither `focus_session` nor `close_session`. Protocol 3 (0.5) had the same `hello`; its cloud sent no `history` setting and the box sent no `session` or `git` notes. Protocol 2 (0.2 to 0.4) had `driver` (`herdr` or `terminal`, for the terminal host those versions had), `herdr` as a version string, and `latest` in `inventory` only. Protocol 1 (0.1) sent `hello` without `driver`, `available` and `recent`.
 
 ## Calls
 
@@ -76,6 +76,7 @@ Names and fields follow the `AgentHost` trait and the types in [`crates/herdr`](
 | `close_workspace` | `workspace` | `null` |
 | `close_tab` | `tab` | `null` |
 | `close_session` | `pane` | `null`; since 0.7, below |
+| `close_pane` | `pane` | `null`; protocol 9, below |
 | `focus_session` | `pane` | `null`; protocol 6, below |
 | `last_message` | `agent` | `{"text", "at", "turn", "cut"}`; protocol 7, below |
 | `refresh_models` | `kind?` (every harness when absent) | `[Available]`, the entries refreshed: the listers run now (below). Errors: `api` with code `unknown_kind`. The box gives itself 15 s; protocol 8 |
@@ -95,6 +96,13 @@ An unknown call answers `bad_call`, so calls can be added behind a protocol bump
 Stops a session when the person asks, including one they started by hand in herdr, which the cloud knows only by its pane. The box asks herdr which tab holds `pane` (`pane get`) and closes that tab (`tab close`), with everything running in it. When it was the only tab of its workspace, herdr closes the workspace too, as it does whenever the last tab goes. Other tabs and workspaces are left alone.
 
 - `api` with code `not_found`: herdr has no pane with that id (or it went away before its tab closed).
+- Any other herdr error keeps herdr's own code, as for every call.
+
+### `close_pane`
+
+Stops one session and leaves the rest of its tab open: the box closes `pane` alone (`herdr pane close`). When it was the tab's last pane, herdr closes the tab too, and the workspace with its last tab, so this is `close_session`'s result for a session alone in its tab.
+
+- `api` with code `not_found`: herdr has no pane with that id.
 - Any other herdr error keeps herdr's own code, as for every call.
 
 ### `focus_session`

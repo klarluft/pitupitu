@@ -486,6 +486,10 @@ impl AgentHost for HerdrCli {
         self.run_json(&["tab", "close", &tab.0]).await.map(drop)
     }
 
+    async fn close_pane(&self, pane: &PaneId) -> Result<()> {
+        self.run_json(&["pane", "close", &pane.0]).await.map(drop)
+    }
+
     async fn pane_tab(&self, pane: &PaneId) -> Result<TabId> {
         let result = self.run_json(&["pane", "get", &pane.0]).await?;
         result["pane"]["tab_id"]

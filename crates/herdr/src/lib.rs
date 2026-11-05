@@ -111,6 +111,9 @@ pub trait AgentHost: Send + Sync {
 
     async fn close_tab(&self, tab: &TabId) -> Result<()>;
 
+    /// Close `pane` alone; herdr closes its tab with its last pane.
+    async fn close_pane(&self, pane: &PaneId) -> Result<()>;
+
     /// The tab that holds `pane`, any pane, the person's own included;
     /// `pane_not_found` when there is none.
     async fn pane_tab(&self, pane: &PaneId) -> Result<TabId>;
