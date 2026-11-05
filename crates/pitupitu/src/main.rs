@@ -1454,7 +1454,7 @@ async fn setup(
     // Another cloud (a local gateway) has its own site, which the box does not know.
     if cfg.cloud_url == config::DEFAULT_CLOUD_URL {
         eprintln!();
-        eprintln!("  all set; now open https://pitupitu.chat/app on your phone or any browser");
+        eprintln!("  all set; now open the iPhone or Android app, or https://pitupitu.chat/app in any browser");
     }
     Ok(())
 }

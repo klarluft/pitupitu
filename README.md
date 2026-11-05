@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from your phone or any browser.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the <a href="https://apps.apple.com/app/id6825985495">iPhone</a> or <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app">Android</a> app or any browser.<br>
   Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
@@ -22,6 +22,8 @@
 
 <p align="center">
   <a href="https://pitupitu.chat">Website</a> ·
+  <a href="https://apps.apple.com/app/id6825985495">iPhone app</a> ·
+  <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app">Android app</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#commands">Commands</a> ·
@@ -36,7 +38,7 @@ You say what you want done and where. pitupitu starts the agent session on that 
 
 pitupitu runs your agents in [Herdr TUI](https://herdr.dev/tui), herdr's terminal app: a terminal workspace manager for coding agents, the `herdr` command. Open `herdr` on that machine and you see exactly what your phone sees: the same sessions, live, to watch or type into at the desk. If it is not installed, pitupitu installs it. The Herdr desktop app is a separate program on its own runtime: pitupitu does not use it, and sessions pitupitu starts do not appear in it.
 
-This repository is the part that runs on each of your machines: a small Rust agent that links the machine to pitupitu cloud over one outbound WebSocket. The conversation, the voice and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
+This repository is the part that runs on each of your machines: a small Rust agent that links the machine to pitupitu cloud over one outbound WebSocket. The conversation, the voice, the apps and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
 
 <table>
   <tr>
@@ -63,7 +65,7 @@ curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/
 pitupitu setup                                  # sign in with a code, pick a folder, start the service
 ```
 
-Then open [pitupitu.chat/app](https://pitupitu.chat/app) on your phone and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
+Then open the [iPhone](https://apps.apple.com/app/id6825985495) or [Android](https://play.google.com/store/apps/details?id=chat.pitupitu.app) app, or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser, and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
 
 ## How it works
 
@@ -121,7 +123,7 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 7. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
 8. **Your folders, on macOS**: macOS asks before a program opens your Desktop, Documents, Downloads or iCloud Drive, and agents running in a herdr that pitupitu started are asked about as pitupitu (in a herdr you opened from your terminal, as your terminal app). So that this comes up now, while you are at the Mac, and not later while you are away with only your phone, the service opens each folder once as it starts: click Allow. Release builds are signed, so the answer stays through updates. `pitupitu status` shows what was allowed; to change it: System Settings › Privacy & Security › Files and Folders › pitupitu.
 
-Then open [pitupitu.chat/app](https://pitupitu.chat/app).
+Then open the [iPhone](https://apps.apple.com/app/id6825985495) or [Android](https://play.google.com/store/apps/details?id=chat.pitupitu.app) app, or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser.
 
 ## Commands
 
