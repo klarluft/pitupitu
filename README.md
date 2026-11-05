@@ -6,9 +6,15 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the <a href="https://apps.apple.com/app/id6825985495">iPhone</a> or <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app">Android</a> app or any browser.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the iPhone or Android app or any browser.<br>
   Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
+</p>
+
+<p align="center" id="apps">
+  <a href="https://apps.apple.com/us/app/pitupitu-chat/id6825985495"><img src="assets/app-store-badge.svg" alt="Download on the App Store" height="48"></a>
+  &nbsp;&nbsp;
+  <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app"><img src="assets/google-play-badge.svg" alt="Get it on Google Play" height="48"></a>
 </p>
 
 <p align="center">
@@ -22,8 +28,6 @@
 
 <p align="center">
   <a href="https://pitupitu.chat">Website</a> ·
-  <a href="https://apps.apple.com/app/id6825985495">iPhone app</a> ·
-  <a href="https://play.google.com/store/apps/details?id=chat.pitupitu.app">Android app</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#commands">Commands</a> ·
@@ -65,7 +69,7 @@ curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/
 pitupitu setup                                  # sign in with a code, pick a folder, start the service
 ```
 
-Then open the [iPhone](https://apps.apple.com/app/id6825985495) or [Android](https://play.google.com/store/apps/details?id=chat.pitupitu.app) app, or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser, and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
+Then open the [iPhone or Android app](#apps), or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser, and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
 
 ## How it works
 
@@ -123,7 +127,7 @@ It asks a few plain questions; pressing Enter takes the suggested answer.
 7. **Starting by itself**: pitupitu starts now and whenever you log in (a user service running `pitupitu connect`: systemd on Linux, launchd on macOS). On Linux, setup asks once whether to keep it running while you are logged out, so your phone still reaches the machine and it comes back by itself after a restart; yes by default (`loginctl enable-linger`). `--linger` / `--no-linger` answer for a script.
 8. **Your folders, on macOS**: macOS asks before a program opens your Desktop, Documents, Downloads or iCloud Drive, and agents running in a herdr that pitupitu started are asked about as pitupitu (in a herdr you opened from your terminal, as your terminal app). So that this comes up now, while you are at the Mac, and not later while you are away with only your phone, the service opens each folder once as it starts: click Allow. Release builds are signed, so the answer stays through updates. `pitupitu status` shows what was allowed; to change it: System Settings › Privacy & Security › Files and Folders › pitupitu.
 
-Then open the [iPhone](https://apps.apple.com/app/id6825985495) or [Android](https://play.google.com/store/apps/details?id=chat.pitupitu.app) app, or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser.
+Then open the [iPhone or Android app](#apps), or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser.
 
 ## Commands
 
@@ -217,3 +221,5 @@ Your sessions are not touched. The box agent's update restarts only the box agen
 Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for the checks, the release process and the DCO sign-off, and [docs/sessions.md](docs/sessions.md) for what every session state means. This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+<sub>Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries. App Store is a service mark of Apple Inc., registered in the U.S. and other countries. Google Play and the Google Play logo are trademarks of Google LLC.</sub>
