@@ -6,7 +6,7 @@
 # file in as it is, so the formula and the binaries it points at come from
 # the same run. Homebrew reads the version from the `v…` in the URLs.
 class Pitupitu < Formula
-  desc "Links this machine's coding agents to pitupitu, a voice foreman"
+  desc "Links this machine's coding agents to pitupitu, a voice assistant"
   homepage "https://pitupitu.chat"
   license "Apache-2.0"
 
