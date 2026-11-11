@@ -510,12 +510,7 @@ mod tests {
             return;
         };
         let host = &scratch.cli;
-        host.start_server().unwrap();
-        let end = std::time::Instant::now() + Duration::from_secs(15);
-        while host.list_workspaces().await.is_err() {
-            assert!(std::time::Instant::now() < end, "no server");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        scratch.serve().await;
         let home = tempfile::tempdir().unwrap();
         // herdr reports the resolved path (macOS: /var is /private/var).
         let home_path = home.path().canonicalize().unwrap();
@@ -584,12 +579,7 @@ mod tests {
             return;
         };
         let host = &scratch.cli;
-        host.start_server().unwrap();
-        let end = std::time::Instant::now() + Duration::from_secs(15);
-        while host.list_workspaces().await.is_err() {
-            assert!(std::time::Instant::now() < end, "no server");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        scratch.serve().await;
         let dir = tempfile::tempdir().unwrap();
         let first = host.create_workspace(dir.path(), "mine").await.unwrap();
         let second = host
@@ -643,12 +633,7 @@ mod tests {
             return;
         };
         let host = &scratch.cli;
-        host.start_server().unwrap();
-        let end = std::time::Instant::now() + Duration::from_secs(15);
-        while host.list_workspaces().await.is_err() {
-            assert!(std::time::Instant::now() < end, "no server");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        scratch.serve().await;
         let dir = tempfile::tempdir().unwrap();
         let first = host.create_workspace(dir.path(), "first").await.unwrap();
         let other = host.create_workspace(dir.path(), "other").await.unwrap();

@@ -1,17 +1,14 @@
 //! herdr itself rather than its panes: which version is installed, whether
-//! its server answers, starting one, updating herdr and installing its
-//! agent integrations.
+//! its server answers, updating herdr and installing its agent
+//! integrations.
 //!
-//! herdr starts no server on its own: with none running, every API call
-//! fails with `server_not_running`. The box starts `herdr server` in a
-//! session of its own and never stops one; whoever is first wins, so a
-//! herdr the person opened is used as it is, and one the box started is
-//! what `herdr` attaches to later.
+//! The server is the person's: it runs while they have `herdr` open (or
+//! run `herdr server` themselves). With none running, every API call
+//! fails with `server_not_running`. Nothing here starts or stops one.
 
 use crate::{Error, HerdrCli, Result};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::process::Stdio;
 
 /// The error code of any API call while no server runs.
 pub const SERVER_NOT_RUNNING: &str = "server_not_running";
@@ -67,58 +64,10 @@ impl HerdrCli {
         }
     }
 
-    /// Start `herdr server` detached: a session and process group of its
-    /// own, no terminal, its output dropped (herdr keeps its own logs),
-    /// never waited on by the caller. It gets the server environment when
-    /// one was given ([`HerdrCli::with_server_env`]): every pane inherits
-    /// it. Stopping or restarting the box agent
-    /// does not stop it; nothing here ever does.
-    pub fn start_server(&self) -> Result<()> {
-        let mut cmd = std::process::Command::new(&self.bin);
-        if let Some(s) = &self.session {
-            cmd.args(["--session", s]);
-        }
-        if let Some(env) = &self.server_env {
-            env.apply_std(&mut cmd);
-        }
-        cmd.arg("server")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // SAFETY: setsid is async-signal-safe and touches no memory
-            // of the parent.
-            unsafe {
-                cmd.pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
-        let mut child = cmd.spawn().map_err(Error::Spawn)?;
-        // Reaped if it ever exits while the box agent runs; once the box
-        // agent exits, it belongs to init like any daemon.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        Ok(())
-    }
-
-    /// `herdr update`, with `--handoff` to restart the server with its
-    /// panes kept (best effort). Without it the running server and its
-    /// panes stay as they are. The error carries the command's last line.
-    pub async fn update(&self, handoff: bool) -> Result<String> {
-        let mut args = vec!["update"];
-        if handoff {
-            args.push("--handoff");
-        }
-        // With a handoff herdr starts the new server from this command.
-        let (status, stdout, stderr) = self.exec_env(&args, true).await?;
-        checked_output(status, stdout, stderr)
+    /// `herdr update`. The running server and its panes stay as they
+    /// are. The error carries the command's last line.
+    pub async fn update(&self) -> Result<String> {
+        self.checked(&["update"]).await
     }
 
     /// `herdr integration install <kind>`: herdr's own hooks for that
@@ -130,24 +79,16 @@ impl HerdrCli {
     /// Run a command for its text; a failure carries its last line.
     async fn checked(&self, args: &[&str]) -> Result<String> {
         let (status, stdout, stderr) = self.exec(args).await?;
-        checked_output(status, stdout, stderr)
+        if !status.success() {
+            return Err(Error::Exit {
+                status: status.code().unwrap_or(-1),
+                stderr: last_line(&stderr)
+                    .or_else(|| last_line(&stdout))
+                    .unwrap_or_default(),
+            });
+        }
+        Ok(format!("{stdout}{stderr}"))
     }
-}
-
-fn checked_output(
-    status: std::process::ExitStatus,
-    stdout: String,
-    stderr: String,
-) -> Result<String> {
-    if !status.success() {
-        return Err(Error::Exit {
-            status: status.code().unwrap_or(-1),
-            stderr: last_line(&stderr)
-                .or_else(|| last_line(&stdout))
-                .unwrap_or_default(),
-        });
-    }
-    Ok(format!("{stdout}{stderr}"))
 }
 
 pub(crate) fn last_line(text: &str) -> Option<String> {

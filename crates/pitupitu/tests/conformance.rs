@@ -3,6 +3,7 @@
 //! counter and error code means is checked here, not in a support ticket.
 
 use herdr::{AgentHost, AgentInfo, AgentKind, AgentStatus, HerdrCli, StartOpts, WorkspaceId};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -187,7 +188,18 @@ async fn herdr_passes_the_scenario() {
     let session = format!("pitutest-conf-{}", std::process::id());
     let _scratch = Scratch(session.clone());
     let host = HerdrCli::new().with_session(&session);
-    host.start_server().expect("herdr runs");
+    let mut server = std::process::Command::new("herdr")
+        .args(["--session", &session, "server"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("herdr runs");
+    // Reaped when it stops (the session is stopped on drop).
+    std::thread::spawn(move || {
+        let _ = server.wait();
+    });
     let end = Instant::now() + Duration::from_secs(15);
     while host.list_agents().await.is_err() {
         assert!(Instant::now() < end, "herdr's server never answered");

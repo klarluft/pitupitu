@@ -12,9 +12,10 @@ pitupitu lets the person talk (in the iPhone or Android app, or on https://pitup
 
 ## Install and link this machine
 
-1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin`, installs herdr when it is missing, and runs setup when there is a terminal; without one, run step 2 yourself. Where Homebrew is the person's way of installing tools, `brew install klarluft/tap/pitupitu` instead, then step 2.
+1. Install: `curl -fsSL https://pitupitu.chat/install | sh` (Linux, macOS). It puts `pitupitu` in `~/.local/bin` and runs setup when there is a terminal; without one, run step 2 yourself. Where Homebrew is the person's way of installing tools, `brew install klarluft/tap/pitupitu` instead, then step 2.
 2. Link: `pitupitu setup --home ~/pitupitu`. It prints a short code and a URL. **The person must approve the code themselves** in their browser while signed in to pitupitu.chat: show them the code and URL and wait. Never try to approve it for them. `--box <name>` sets how this machine is named (default: its hostname); `--no-browser` only prints the URL.
-3. Setup installs herdr if it is still missing and herdr's integrations for the agents it finds, then a user service that keeps the link open. On Linux it asks once whether to keep pitupitu running while the person is logged out (lingering; yes by default); without a terminal pass `--linger` or `--no-linger` only if the person said which. Check with `pitupitu status`.
+3. Setup needs herdr: at a terminal it asks whether to install it when it is missing; without one it does not install it and ends with the command (`curl -fsSL https://herdr.dev/install.sh | sh`), which you run only if the person says so. It installs herdr's integrations for the agents it finds, then a user service that keeps the link open. On Linux it asks once whether to keep pitupitu running while the person is logged out (lingering; yes by default); without a terminal pass `--linger` or `--no-linger` only if the person said which.
+4. **herdr must be running**: pitupitu never starts it. The person opens `herdr` in a terminal of their own and leaves it running; it cannot be started for them from here. Check with `pitupitu status`: its `herdr:` line ends in `server running`; `not running` or `not installed` says what is still needed, so tell the person.
 
 If the person's agents are not logged in yet, tell them to run `claude` (or `codex`) once and log in. Do not do it for them and do not touch credential files.
 
@@ -55,7 +56,7 @@ The person's list (things to do and ideas), reminders and scheduled sessions liv
 
 ## Updating
 
-`pitupitu update --check` says whether a newer release of the box agent exists (`--json` for `{"current","latest","update_available"}`); `pitupitu update herdr --check` the same for herdr, `pitupitu update all --check` for both. `pitupitu update [herdr|all]` installs it the way it was installed (Homebrew, or the installer): it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking, and `--handoff` (restart herdr's server on the new version now) only when they asked for that. Sessions keep running through an update: only the box agent restarts, and herdr's running server stays as it is unless handed off.
+`pitupitu update --check` says whether a newer release of the box agent exists (`--json` for `{"current","latest","update_available"}`); `pitupitu update herdr --check` the same for herdr, `pitupitu update all --check` for both. `pitupitu update [herdr|all]` installs it the way it was installed (Homebrew, or the installer): it shows what would change and what is running, then asks. **Run it only when the person asks to update, and let them answer the question themselves.** Pass `--yes` only when they said, in so many words, to update without asking. Sessions keep running through an update: only the box agent restarts, and herdr's running server stays as it is until the person quits herdr and opens it again.
 
 ## This skill
 

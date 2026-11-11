@@ -167,9 +167,8 @@ async fn a_bad_checksum_installs_nothing() {
 }
 
 /// A stand-in `herdr` installed by its installer (its folder is
-/// `$HERDR_INSTALL_DIR`): `status --json` from its state files, `update`
-/// moves it to 9.9.9 and leaves the running server stale unless it hands
-/// off.
+/// `$HERDR_INSTALL_DIR`): `status --json` from its state files, a plain
+/// `update` moves it to 9.9.9 and leaves the running server stale.
 fn fake_herdr(dir: &std::path::Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("herdr");
@@ -182,8 +181,9 @@ v="$(cat "$d/version")"
 r="$(cat "$d/restart" 2>/dev/null || echo false)"
 case "$1" in
   status) printf '{"client":{"version":"%s","protocol":22,"binary":"%s"},"server":{"running":true},"update":{"restart_needed":%s}}\n' "$v" "$0" "$r" ;;
-  update) echo 9.9.9 > "$d/version"
-          if [ "$2" = "--handoff" ]; then echo false > "$d/restart"; else echo true > "$d/restart"; fi
+  update) [ "$#" -eq 1 ] || exit 3
+          echo 9.9.9 > "$d/version"
+          echo true > "$d/restart"
           echo "herdr updated to 9.9.9" ;;
   agent) echo '{"id":"x","result":{"agents":[]}}' ;;
   *) exit 2 ;;
@@ -231,17 +231,4 @@ async fn herdr_is_updated_with_its_own_updater_and_says_when_it_needs_a_restart(
     // Now the newest: nothing to do.
     let (ok, text) = run_with(&exe, &url, herdr, &["update", "herdr", "--yes"]).await;
     assert!(ok && text.contains("newest"), "{text}");
-
-    // With a handoff the server restarts on the new version.
-    std::fs::write(herdr_dir.join("version"), "0.9.3\n").unwrap();
-    let (ok, text) = run_with(
-        &exe,
-        &url,
-        herdr,
-        &["--json", "update", "herdr", "--yes", "--handoff"],
-    )
-    .await;
-    assert!(ok, "{text}");
-    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
-    assert_eq!(v["restart"], "done");
 }
