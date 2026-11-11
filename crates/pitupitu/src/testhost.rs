@@ -210,11 +210,13 @@ impl ScratchHerdr {
             eprintln!("skipped: herdr is not on PATH");
             return None;
         }
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        let name = format!("pitutest-{}-{nanos}", std::process::id());
+        // Unique within this process by a counter: the clock alone is not
+        // (macOS gives microseconds, and tests start on parallel threads
+        // in the same microsecond), and two tests sharing a session share
+        // its server, which the first to finish stops under the other.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("pitutest-{}-{n}", std::process::id());
         Some(ScratchHerdr {
             cli: herdr::HerdrCli::with_binary("herdr").with_session(&name),
             name,
