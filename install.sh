@@ -1,8 +1,9 @@
 #!/bin/sh
 # Installs the pitupitu box agent: curl -fsSL https://pitupitu.chat/install | sh
 # Downloads the latest release for this machine into ~/.local/bin (or
-# $PITUPITU_INSTALL_DIR), checks its SHA-256, installs herdr when it is
-# missing, then runs `pitupitu setup` when there is a terminal to answer it.
+# $PITUPITU_INSTALL_DIR), checks its SHA-256, then runs `pitupitu setup`
+# when there is a terminal to answer it; setup offers to install herdr,
+# which runs the agents, when it is missing.
 set -eu
 
 repo="klarluft/pitupitu"
@@ -43,19 +44,6 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "your terminal does not find pitupitu by its name yet (add $dir to your PATH)" ;;
 esac
-# pitupitu runs the agents in herdr: installed with herdr's own installer
-# when it is missing. A failure is said, not fatal; setup tries again.
-herdr_dir="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
-if ! command -v herdr >/dev/null 2>&1 && [ ! -x "$herdr_dir/herdr" ]; then
-  echo "pitupitu runs your coding agents inside herdr's terminal app (Herdr TUI), a small program that keeps them running; installing it"
-  if curl -fsSL https://herdr.dev/install.sh -o "$tmp/herdr-install.sh" &&
-    sh "$tmp/herdr-install.sh"; then
-    :
-  else
-    echo "herdr could not be installed; pitupitu setup tries again (or install Herdr TUI from https://herdr.dev/tui; the desktop app is a different program)" >&2
-  fi
-fi
-
 # `-r /dev/tty` is true even without a controlling terminal; opening it
 # is the real test.
 if (exec </dev/tty) 2>/dev/null; then

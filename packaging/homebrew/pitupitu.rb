@@ -49,8 +49,9 @@ class Pitupitu < Formula
 
         pitupitu setup
 
-      pitupitu runs your agents in herdr; setup installs it when it is
-      missing. After `brew upgrade pitupitu`, run `pitupitu setup` again so the
+      pitupitu runs your agents in herdr; setup offers to install it when
+      it is missing. Keep herdr open in a terminal (run `herdr`) so
+      pitupitu can reach your agents. After `brew upgrade pitupitu`, run `pitupitu setup` again so the
       service restarts on the new version. Before `brew uninstall pitupitu`,
       run `pitupitu uninstall` to remove the service.
     EOS

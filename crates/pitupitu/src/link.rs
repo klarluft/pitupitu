@@ -4,7 +4,7 @@
 //! The protocol is in `docs/box-link.md`.
 
 use crate::calls::{self, CallError};
-use crate::herdr_box::{self, HerdrInfo, Keeper};
+use crate::herdr_box::{self, HerdrInfo};
 use crate::history::{self, Setting};
 use crate::home;
 use crate::inventory::{self, Available, Inventory};
@@ -12,7 +12,7 @@ use crate::jobs::{self, Jobs};
 use crate::update::{self, Refused};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use herdr::{AgentHost, AgentInfo, Status};
+use herdr::{AgentHost, AgentInfo, HerdrCli, Status};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,11 +57,11 @@ pub struct Link {
     pub host: Arc<dyn AgentHost>,
     /// Jobs the agents left running, known across reconnects.
     pub jobs: Arc<Mutex<Jobs>>,
-    /// herdr itself: its status, its server, its updates. `None` when a
-    /// test stands in for herdr; the inventory's `herdr` is then null.
-    pub keeper: Option<Arc<Keeper>>,
+    /// herdr itself: its status and its updates. `None` when a test
+    /// stands in for herdr; the inventory's `herdr` is then null.
+    pub herdr: Option<HerdrCli>,
     /// The agent CLIs found on `PATH` when the agent started. With herdr
-    /// itself (`keeper`) they are looked for again on every connect and
+    /// itself (`herdr`) they are looked for again on every connect and
     /// every five minutes, so one installed later shows up; a test
     /// standing in for herdr keeps these.
     pub available: Vec<Available>,
@@ -139,7 +139,7 @@ impl Link {
         // The profiles the cloud sent last time, until it sends new ones;
         // with herdr itself, the harnesses' listers now and every six hours.
         crate::harness::load(&self.state_dir);
-        if self.keeper.is_some() {
+        if self.herdr.is_some() {
             crate::harness::spawn_refresher(crate::config::home_dir(), LISTERS_EVERY);
         }
         let mut backoff = BACKOFF_MIN;
@@ -189,9 +189,6 @@ impl Link {
             .with_context(|| format!("connecting to {}", self.url))?;
         let (mut sink, mut stream) = ws.split();
 
-        if let Some(k) = &self.keeper {
-            k.ensure(&*self.host).await;
-        }
         let (mut agents, herdr_up) = match self.host.list_agents().await {
             Ok(a) => (a, true),
             Err(e) => {
@@ -205,8 +202,8 @@ impl Link {
             *self.releases.lock().unwrap() = asked;
         }
         let releases = self.releases.lock().unwrap().clone();
-        let status = match &self.keeper {
-            Some(k) => herdr_box::status(k.cli()).await,
+        let status = match &self.herdr {
+            Some(cli) => herdr_box::status(cli).await,
             None => None,
         };
         let inv = Inventory {
@@ -220,7 +217,7 @@ impl Link {
             } else {
                 Vec::new()
             },
-            available: match &self.keeper {
+            available: match &self.herdr {
                 Some(_) => inventory::available().await,
                 None => self.available.clone(),
             },
@@ -263,7 +260,7 @@ impl Link {
             Polled {
                 host: self.host.clone(),
                 jobs: self.jobs.clone(),
-                keeper: self.keeper.clone(),
+                herdr: self.herdr.clone(),
                 home_dir: self.home.clone(),
                 history: self.history.clone(),
                 inventory: shared.clone(),
@@ -359,7 +356,7 @@ impl Link {
                     if crate::harness::apply_note(&value, Some(&self.state_dir)) {
                         debug!("harness profiles from the cloud");
                         // The profiles may name other commands and listers.
-                        if self.keeper.is_some() {
+                        if self.herdr.is_some() {
                             tokio::spawn(async {
                                 crate::harness::refresh(None, &crate::config::home_dir()).await;
                             });
@@ -402,10 +399,10 @@ impl Link {
             return;
         }
         if call == "update" {
-            let keeper = self.keeper.clone();
+            let herdr = self.herdr.clone();
             let tx = tx.clone();
             let refresh = refresh.clone();
-            tokio::spawn(async move { update_call(id, args, keeper, tx, refresh).await });
+            tokio::spawn(async move { update_call(id, args, herdr, tx, refresh).await });
             return;
         }
         // `last_message` reads the agents' logs: only while history is on,
@@ -453,15 +450,14 @@ impl Link {
 async fn update_call(
     id: Value,
     args: Value,
-    keeper: Option<Arc<Keeper>>,
+    herdr: Option<HerdrCli>,
     tx: mpsc::Sender<Out>,
     refresh: Arc<Notify>,
 ) {
+    /// Other fields are ignored.
     #[derive(serde::Deserialize)]
     struct Args {
         what: String,
-        #[serde(default)]
-        handoff: bool,
     }
     let result = match serde_json::from_value::<Args>(args) {
         Err(e) => Err(CallError::bad_call(format!("update: {e}"))),
@@ -469,8 +465,8 @@ async fn update_call(
             let run = async {
                 match a.what.as_str() {
                     "box" => update::update_box().await,
-                    "herdr" => match &keeper {
-                        Some(k) => herdr_box::update(k.cli(), a.handoff).await,
+                    "herdr" => match &herdr {
+                        Some(cli) => herdr_box::update(cli).await,
                         None => Err(Refused::Unavailable("herdr is not driven here".into())),
                     },
                     other => Err(Refused::Unavailable(format!(
@@ -566,7 +562,7 @@ fn signature(agents: &[AgentInfo]) -> Signature {
 struct Polled {
     host: Arc<dyn AgentHost>,
     jobs: Arc<Mutex<Jobs>>,
-    keeper: Option<Arc<Keeper>>,
+    herdr: Option<HerdrCli>,
     home_dir: PathBuf,
     history: Option<PathBuf>,
     updates: bool,
@@ -594,8 +590,8 @@ impl Polled {
     }
 
     async fn read_status(&mut self) {
-        if let Some(k) = &self.keeper {
-            self.status = herdr_box::status(k.cli()).await;
+        if let Some(cli) = &self.herdr {
+            self.status = herdr_box::status(cli).await;
         }
     }
 
@@ -617,7 +613,7 @@ impl Polled {
 
 /// Once a second: send `agents` when herdr's list changed, `home` when the
 /// pitupitu files did, `inventory` when herdr starts or stops answering
-/// (starting its server when it does not); every minute, `inventory` when
+/// (the person opening or quitting it); every minute, `inventory` when
 /// herdr's status changed; every five minutes when the recent folders
 /// or the agent CLIs on `PATH` did; every six hours when a newer release
 /// appeared.
@@ -655,7 +651,7 @@ async fn poll(
                 continue;
             }
             _ = recent_tick.tick() => {
-                if p.keeper.is_some() {
+                if p.herdr.is_some() {
                     let available = inventory::available().await;
                     if !p.inventory(&tx, |i| i.available = available).await {
                         return;
@@ -671,7 +667,7 @@ async fn poll(
                 }
                 continue;
             }
-            _ = crate::harness::CHANGED.notified(), if p.keeper.is_some() => {
+            _ = crate::harness::CHANGED.notified(), if p.herdr.is_some() => {
                 let available = inventory::available().await;
                 if !p.inventory(&tx, |i| i.available = available).await {
                     return;
@@ -683,19 +679,20 @@ async fn poll(
         }
         let listed = host.list_agents().await;
         let now_up = listed.is_ok();
-        if let (Err(e), Some(k)) = (&listed, &p.keeper) {
-            k.revive(e).await;
-        }
         if now_up != up {
             up = now_up;
             herdr_changed = true;
             if up {
                 info!("herdr answers");
-                if let Some(k) = &p.keeper {
-                    k.answered();
-                }
             } else {
-                warn!("herdr does not answer");
+                match &p.status {
+                    Some(_) => warn!("herdr does not answer: {}", herdr_box::OPEN_HINT),
+                    None => warn!(
+                        "herdr does not answer and is not installed: install it ({}), then {}",
+                        herdr_box::INSTALL_COMMAND,
+                        herdr_box::OPEN_HINT
+                    ),
+                }
             }
         }
         if herdr_changed {
@@ -801,7 +798,7 @@ mod tests {
             home: home.clone(),
             host: Arc::new(host),
             jobs: Arc::new(Mutex::new(Jobs::reading(None, |_| Vec::new()))),
-            keeper: None,
+            herdr: None,
             available: vec![Available {
                 kind: "claude".into(),
                 version: "2.3.1 (Claude Code)".into(),
@@ -1058,10 +1055,10 @@ mod tests {
         session.abort();
     }
 
-    /// A live herdr in a throwaway session: none runs there, so the box
-    /// starts the server before `hello`, which says so.
+    /// A live herdr in a throwaway session where no server runs: the box
+    /// says so in `hello` and does not start one.
     #[tokio::test]
-    async fn the_box_starts_herdrs_server_and_reports_it() {
+    async fn the_box_reports_herdr_not_running_and_leaves_it_so() {
         let Some(scratch) = crate::testhost::ScratchHerdr::new() else {
             return;
         };
@@ -1069,15 +1066,17 @@ mod tests {
         let (url, server) = cloud().await;
         let mut l = link(url, FakeHost::default(), dir.path().to_path_buf());
         l.host = Arc::new(scratch.cli.clone());
-        l.keeper = Some(Arc::new(Keeper::new(scratch.cli.clone())));
+        l.herdr = Some(scratch.cli.clone());
         let session = tokio::spawn(async move { l.session().await });
         let mut ws = server.await.unwrap();
         let hello = next_json(&mut ws).await;
-        assert_eq!(hello["herdr"]["running"], true, "{hello}");
+        assert_eq!(hello["herdr"]["running"], false, "{hello}");
         assert!(hello["herdr"]["version"].as_str().unwrap().contains('.'));
         assert!(hello["herdr"]["protocol"].is_u64(), "{hello}");
-        let kinds = hello["kinds"].as_array().unwrap();
-        assert!(kinds.iter().any(|k| k == "claude"), "{hello}");
+        assert_eq!(hello["kinds"], json!([]), "{hello}");
+        // A few polls later, still no server.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!scratch.cli.status().await.unwrap().running);
         session.abort();
     }
 

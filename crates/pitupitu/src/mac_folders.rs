@@ -1,8 +1,10 @@
 //! macOS asks the person before a program opens their Desktop, Documents,
 //! Downloads or iCloud Drive, and remembers the answer for that program.
-//! Everything running in a herdr server the box agent started (the shells,
-//! the agents) is asked about as the box agent: a server started from a
-//! terminal app is asked about as that app instead.
+//! The box agent itself reads the projects kept there: it looks whether
+//! the recent project folders still exist and asks git about each one
+//! (its branch and recent commits, `history.rs`), and those reads are
+//! asked about as the box agent. The agents themselves run in herdr, in
+//! the person's terminal app, and are asked about as that app.
 //!
 //! So that the question comes while the person is at the machine, and not
 //! later while they are away with only their phone (when nobody can answer

@@ -63,7 +63,8 @@ fn homebrew_opt(exe: &Path) -> Option<PathBuf> {
 }
 
 /// The PATH the service runs with: the installing shell's, plus herdr's
-/// folder when herdr was just installed somewhere that is not on it yet.
+/// folder when herdr was just installed somewhere that is not on it yet,
+/// so the box agent finds the `herdr` command it talks to the server with.
 fn env_path() -> String {
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
     let path = lasting_path(&path, fnm_default_bin().as_deref());
@@ -155,9 +156,6 @@ Wants=network-online.target
 ExecStart={exec}
 Restart=always
 RestartSec=5
-# Stopping or restarting the service ends the box agent only, not the
-# herdr server it may have started: agents running there keep running.
-KillMode=process
 Environment={env}
 
 [Install]
@@ -171,6 +169,9 @@ fn quote_systemd(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// The launchd agent. `AbandonProcessGroup`: the script that restarts the
+/// agent after the box agent updated itself runs in a process group of
+/// its own, and must outlive the job it stops ([`restart_soon`]).
 pub fn launchd_plist(exe: &Path, config: Option<&Path>, path: &str, log: &Path) -> String {
     let mut args = vec![exe.display().to_string()];
     if let Some(c) = config {
@@ -332,8 +333,8 @@ pub fn installed() -> bool {
 }
 
 /// Restart the service so it runs the binary now at its path. `false`
-/// when no service is installed. Only the box agent restarts: herdr's
-/// server is not part of the service, even when the box started it.
+/// when no service is installed. Only the box agent restarts: herdr is
+/// the person's own program, not part of the service.
 pub fn restart() -> Result<bool> {
     if cfg!(target_os = "macos") {
         if !launchd_file().exists() {

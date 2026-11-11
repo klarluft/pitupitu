@@ -1,26 +1,17 @@
-//! herdr on this box: what the inventory says about it, keeping its
-//! server running, and updating it when the person asks.
+//! herdr on this box: what the inventory says about it, installing it
+//! when the person says yes in setup, and updating it when they ask.
 //!
-//! The box starts `herdr server` when none answers, at its own start and
-//! whenever the socket stops answering, with a growing pause between
-//! tries; it never stops one. The person opening `herdr` attaches to the
-//! same server. herdr is updated the way it was installed (`brew upgrade
-//! herdr` under a Cellar, `herdr update` for herdr's own installer) and
-//! never on the box's own initiative.
+//! herdr's server is the person's own: they run `herdr` in a terminal of
+//! their login session, and the box only connects to it. The box never
+//! starts, restarts or stops a server. herdr is updated the way it was
+//! installed (`brew upgrade herdr` under a Cellar, `herdr update` for
+//! herdr's own installer) and never on the box's own initiative; the
+//! running server stays as it is until the person restarts herdr.
 
 use crate::update::{self, Refused, Updated};
 use herdr::{HerdrCli, Status};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-use tracing::{info, warn};
-
-/// The first pause after starting a server that did not come up.
-const RETRY_MIN: Duration = Duration::from_secs(5);
-const RETRY_MAX: Duration = Duration::from_secs(300);
-/// How long the box waits for a server it started to answer, at most.
-const COME_UP: Duration = Duration::from_secs(5);
 
 /// The `herdr` object of the inventory (`docs/box-link.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -81,6 +72,32 @@ pub fn install_kind(binary: Option<&Path>) -> &'static str {
 
 /// herdr's own installer.
 pub const INSTALLER: &str = "https://herdr.dev/install.sh";
+/// The command that installs herdr, as the person would type it.
+pub const INSTALL_COMMAND: &str = "curl -fsSL https://herdr.dev/install.sh | sh";
+/// What the person does when herdr is installed but its server does not
+/// answer: the box never starts one itself.
+pub const OPEN_HINT: &str = "open herdr in a terminal (run `herdr`) and leave it open";
+
+/// The herdr this box drives: `herdr` on `PATH` (or `$HERDR_BIN`), else
+/// where herdr's installer puts it, so a herdr installed after the
+/// service was written, into a folder its `PATH` lacks, is still found.
+/// The session from `$PITUPITU_HERDR_SESSION` either way.
+pub fn cli() -> HerdrCli {
+    let cli = HerdrCli::new();
+    if std::env::var_os("HERDR_BIN").is_some() || on_path("herdr").is_some() {
+        return cli;
+    }
+    match find_binary() {
+        Some(bin) => {
+            let found = HerdrCli::with_binary(bin.display().to_string());
+            match cli.session() {
+                Some(s) => found.with_session(s),
+                None => found,
+            }
+        }
+        None => cli,
+    }
+}
 
 /// `name` on `PATH`, as the shell would find it.
 pub fn on_path(name: &str) -> Option<PathBuf> {
@@ -135,93 +152,6 @@ pub async fn status(cli: &HerdrCli) -> Option<Status> {
     }
 }
 
-/// Keeps herdr's server running: started when it does not answer, with
-/// a growing pause between tries so a herdr that cannot start is not
-/// spun on.
-pub struct Keeper {
-    cli: HerdrCli,
-    next: Mutex<(Instant, Duration)>,
-}
-
-impl Keeper {
-    pub fn new(cli: HerdrCli) -> Self {
-        Keeper {
-            cli,
-            next: Mutex::new((Instant::now(), RETRY_MIN)),
-        }
-    }
-
-    pub fn cli(&self) -> &HerdrCli {
-        &self.cli
-    }
-
-    /// The server answers again: the next failure is retried at once.
-    pub fn answered(&self) {
-        *self.next.lock().unwrap() = (Instant::now(), RETRY_MIN);
-    }
-
-    /// herdr did not answer `err`: start a server if none runs and the
-    /// pause since the last try is over. `true` when one was started.
-    pub async fn revive(&self, err: &herdr::Error) -> bool {
-        if matches!(err, herdr::Error::Spawn(_)) {
-            return false; // not installed
-        }
-        {
-            let (at, _) = *self.next.lock().unwrap();
-            if Instant::now() < at {
-                return false;
-            }
-        }
-        let not_running = err.code() == Some(herdr::SERVER_NOT_RUNNING)
-            || matches!(self.cli.status().await, Ok(s) if !s.running);
-        if !not_running {
-            // A server answers, for something else: look again later.
-            self.next.lock().unwrap().0 = Instant::now() + RETRY_MIN;
-            return false;
-        }
-        {
-            let mut next = self.next.lock().unwrap();
-            next.0 = Instant::now() + next.1;
-            next.1 = (next.1 * 2).min(RETRY_MAX);
-        }
-        // Started with what a terminal would give it: every pane
-        // inherits the server's environment.
-        let cli = self
-            .cli
-            .clone()
-            .with_server_env(crate::terminal_env::for_herdr().await);
-        match cli.start_server() {
-            Ok(()) => {
-                info!(session = ?self.cli.session(), "started herdr's server");
-                true
-            }
-            Err(e) => {
-                warn!("could not start herdr's server: {e}");
-                false
-            }
-        }
-    }
-
-    /// At the box agent's start: when herdr does not answer, start its
-    /// server and give it a moment to come up.
-    pub async fn ensure(&self, host: &dyn herdr::AgentHost) {
-        let Err(e) = host.list_agents().await else {
-            return;
-        };
-        if !self.revive(&e).await {
-            return;
-        }
-        let end = Instant::now() + COME_UP;
-        while Instant::now() < end {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if host.list_agents().await.is_ok() {
-                self.answered();
-                return;
-            }
-        }
-    }
-}
-
 /// herdr as it is and as it could be, before an update.
 #[derive(Debug, Clone)]
 pub struct HerdrCheck {
@@ -243,11 +173,9 @@ impl HerdrCheck {
 
 pub async fn check(cli: &HerdrCli) -> Result<HerdrCheck, Refused> {
     let Some(status) = status(cli).await else {
-        return Err(Refused::Unavailable(
-            "herdr is not installed here; `curl -fsSL https://herdr.dev/install.sh | sh` \
-             installs it"
-                .into(),
-        ));
+        return Err(Refused::Unavailable(format!(
+            "herdr is not installed here; `{INSTALL_COMMAND}` installs it"
+        )));
     };
     Ok(HerdrCheck {
         install: install_kind(status.binary.as_deref()),
@@ -257,9 +185,9 @@ pub async fn check(cli: &HerdrCli) -> Result<HerdrCheck, Refused> {
 }
 
 /// Update herdr the way it was installed. The running server and its
-/// panes stay as they are unless `handoff` (herdr's installer only):
-/// then herdr restarts the server with the panes kept, best effort.
-pub async fn apply(cli: &HerdrCli, c: &HerdrCheck, handoff: bool) -> Result<Updated, Refused> {
+/// panes stay as they are; the new version runs once the person
+/// restarts herdr.
+pub async fn apply(cli: &HerdrCli, c: &HerdrCheck) -> Result<Updated, Refused> {
     let from = c.status.version.clone();
     match c.install {
         "brew" => {
@@ -267,14 +195,7 @@ pub async fn apply(cli: &HerdrCli, c: &HerdrCheck, handoff: bool) -> Result<Upda
             update::run_brew(&bin, "herdr").await?;
         }
         "installer" => {
-            // A handoff starts the new server from this command.
-            let cli = if handoff {
-                cli.clone()
-                    .with_server_env(crate::terminal_env::for_herdr().await)
-            } else {
-                cli.clone()
-            };
-            cli.update(handoff).await.map_err(|e| {
+            cli.update().await.map_err(|e| {
                 Refused::Failed(match e {
                     herdr::Error::Exit { stderr, .. } if !stderr.is_empty() => stderr,
                     e => e.to_string(),
@@ -305,8 +226,6 @@ pub async fn apply(cli: &HerdrCli, c: &HerdrCheck, handoff: bool) -> Result<Upda
     }
     let restart = if after.restart_needed {
         "needed"
-    } else if handoff && c.install == "installer" {
-        "done"
     } else {
         "none"
     };
@@ -320,7 +239,7 @@ pub async fn apply(cli: &HerdrCli, c: &HerdrCheck, handoff: bool) -> Result<Upda
 }
 
 /// The `update` call for herdr: check, then update.
-pub async fn update(cli: &HerdrCli, handoff: bool) -> Result<Updated, Refused> {
+pub async fn update(cli: &HerdrCli) -> Result<Updated, Refused> {
     let c = check(cli).await?;
     if !c.newer() {
         return Err(Refused::Nothing(format!(
@@ -328,7 +247,7 @@ pub async fn update(cli: &HerdrCli, handoff: bool) -> Result<Updated, Refused> {
             c.status.version
         )));
     }
-    apply(cli, &c, handoff).await
+    apply(cli, &c).await
 }
 
 #[cfg(test)]

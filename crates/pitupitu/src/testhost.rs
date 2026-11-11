@@ -191,9 +191,10 @@ impl AgentHost for FakeHost {
 }
 
 /// A throwaway herdr session for tests that need a live herdr: no server
-/// runs in it at first, and it is stopped and deleted on drop, passed or
-/// not. The person's own session is never touched. `None` when `herdr`
-/// is not on `PATH`, and the test skips.
+/// runs in it until the test starts one ([`ScratchHerdr::serve`]), and it
+/// is stopped and deleted on drop, passed or not. The person's own
+/// session is never touched. `None` when `herdr` is not on `PATH`, and
+/// the test skips.
 pub struct ScratchHerdr {
     pub cli: herdr::HerdrCli,
     name: String,
@@ -209,15 +210,41 @@ impl ScratchHerdr {
             eprintln!("skipped: herdr is not on PATH");
             return None;
         }
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        let name = format!("pitutest-{}-{nanos}", std::process::id());
+        // Unique within this process by a counter: the clock alone is not
+        // (macOS gives microseconds, and tests start on parallel threads
+        // in the same microsecond), and two tests sharing a session share
+        // its server, which the first to finish stops under the other.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("pitutest-{}-{n}", std::process::id());
         Some(ScratchHerdr {
             cli: herdr::HerdrCli::with_binary("herdr").with_session(&name),
             name,
         })
+    }
+
+    /// Start `herdr server` in this session, as a person would, and wait
+    /// until it answers. Only tests do this; the box never does.
+    pub async fn serve(&self) {
+        use std::os::unix::process::CommandExt;
+        let mut server = std::process::Command::new("herdr")
+            .args(["--session", &self.name, "server"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("herdr runs");
+        // In a process group of its own, as from a terminal; reaped when
+        // it stops (the session is stopped on drop).
+        std::thread::spawn(move || {
+            let _ = server.wait();
+        });
+        let end = std::time::Instant::now() + Duration::from_secs(15);
+        while self.cli.list_workspaces().await.is_err() {
+            assert!(std::time::Instant::now() < end, "no server");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 

@@ -1,12 +1,13 @@
 //! Against the real herdr, in a throwaway named session: no server runs
-//! there at first, `start_server` starts one that answers, and the test
-//! stops and deletes the session afterwards, passed or not. The person's
-//! own herdr session is never touched. Skipped when `herdr` is not on
-//! `PATH`.
+//! there at first and the API says so; once the test starts one (as a
+//! person would, `herdr server`) it answers. The test stops and deletes
+//! the session afterwards, passed or not. The person's own herdr session
+//! is never touched. Skipped when `herdr` is not on `PATH`.
 
 use herdr::{AgentHost, HerdrCli, SERVER_NOT_RUNNING};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The scratch session, stopped and deleted on drop.
@@ -28,7 +29,7 @@ fn herdr_on_path() -> bool {
 }
 
 #[tokio::test]
-async fn a_server_started_by_the_box_answers_and_is_used() {
+async fn no_server_is_told_and_a_running_one_is_used() {
     if !herdr_on_path() {
         eprintln!("skipped: herdr is not on PATH");
         return;
@@ -44,7 +45,20 @@ async fn a_server_started_by_the_box_answers_and_is_used() {
     assert!(!s.running, "{s:?}");
     assert!(!s.version.is_empty() && s.protocol.is_some(), "{s:?}");
 
-    cli.start_server().unwrap();
+    let mut server = Command::new("herdr")
+        .args(["--session", &name, "server"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+
+    // Reaped when it stops (the session is stopped on drop).
+
+    std::thread::spawn(move || {
+        let _ = server.wait();
+    });
     let end = Instant::now() + Duration::from_secs(15);
     while cli.list_agents().await.is_err() {
         assert!(Instant::now() < end, "the server never answered");
