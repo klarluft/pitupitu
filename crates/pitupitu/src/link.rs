@@ -685,7 +685,14 @@ async fn poll(
             if up {
                 info!("herdr answers");
             } else {
-                warn!("herdr does not answer: open `herdr` in a terminal on this machine");
+                match &p.status {
+                    Some(_) => warn!("herdr does not answer: {}", herdr_box::OPEN_HINT),
+                    None => warn!(
+                        "herdr does not answer and is not installed: install it ({}), then {}",
+                        herdr_box::INSTALL_COMMAND,
+                        herdr_box::OPEN_HINT
+                    ),
+                }
             }
         }
         if herdr_changed {

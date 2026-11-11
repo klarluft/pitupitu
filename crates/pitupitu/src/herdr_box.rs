@@ -76,7 +76,28 @@ pub const INSTALLER: &str = "https://herdr.dev/install.sh";
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://herdr.dev/install.sh | sh";
 /// What the person does when herdr is installed but its server does not
 /// answer: the box never starts one itself.
-pub const OPEN_HINT: &str = "open herdr in a terminal (run `herdr`) and leave it running";
+pub const OPEN_HINT: &str = "open herdr in a terminal (run `herdr`) and leave it open";
+
+/// The herdr this box drives: `herdr` on `PATH` (or `$HERDR_BIN`), else
+/// where herdr's installer puts it, so a herdr installed after the
+/// service was written, into a folder its `PATH` lacks, is still found.
+/// The session from `$PITUPITU_HERDR_SESSION` either way.
+pub fn cli() -> HerdrCli {
+    let cli = HerdrCli::new();
+    if std::env::var_os("HERDR_BIN").is_some() || on_path("herdr").is_some() {
+        return cli;
+    }
+    match find_binary() {
+        Some(bin) => {
+            let found = HerdrCli::with_binary(bin.display().to_string());
+            match cli.session() {
+                Some(s) => found.with_session(s),
+                None => found,
+            }
+        }
+        None => cli,
+    }
+}
 
 /// `name` on `PATH`, as the shell would find it.
 pub fn on_path(name: &str) -> Option<PathBuf> {

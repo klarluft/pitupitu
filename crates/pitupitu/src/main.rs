@@ -1213,7 +1213,7 @@ async fn connect(cfg: &Config) -> Result<()> {
         bail!("this box is not signed in; run `pitupitu setup`");
     };
     let home = cfg.home.clone().unwrap_or_else(config::default_home);
-    let herdr = HerdrCli::new();
+    let herdr = herdr_box::cli();
     match herdr_box::status(&herdr).await {
         Some(s) if s.running => tracing::info!(version = %s.version, "herdr is running"),
         Some(s) => tracing::warn!(
@@ -1461,7 +1461,8 @@ async fn setup(
     eprintln!();
     match (&herdr, running) {
         (None, _) => eprintln!(
-            "  one thing left: install herdr ({}, or see https://herdr.dev/tui), then {}",
+            "  one thing left: install herdr ({}, or see https://herdr.dev/tui), run \
+             pitupitu setup again, then {}",
             herdr_box::INSTALL_COMMAND,
             herdr_box::OPEN_HINT
         ),
@@ -1488,8 +1489,8 @@ async fn wait_for_herdr(cli: &HerdrCli, terminal: bool) -> bool {
     let running = cli.list_agents().await.is_ok();
     if !running {
         eprintln!(
-            "  herdr is not running. Open herdr in a terminal now (run `herdr`) and leave it \
-             running; pitupitu drives your agents there."
+            "  herdr is not running. Open another terminal window or tab, run `herdr` there \
+             and leave it open; pitupitu drives your agents there."
         );
     }
     let running = running
@@ -1992,7 +1993,7 @@ async fn status(cfg: &Config) -> Result<()> {
         files.len(),
         if files.len() == 1 { "" } else { "s" }
     );
-    let cli = HerdrCli::new();
+    let cli = herdr_box::cli();
     let (herdr, newest_herdr, newer_box) = tokio::join!(
         herdr_box::status(&cli),
         update::herdr_newest(),
