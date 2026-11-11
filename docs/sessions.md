@@ -82,7 +82,7 @@ spells them:
 
 | code | call | when |
 |---|---|---|
-| `server_not_running` | any | no herdr server answers; the box is starting one |
+| `server_not_running` | any | no herdr server answers; open herdr on that machine (run `herdr` in a terminal and leave it running) |
 | `agent_not_found` | any agent call | no live agent has that name or pane |
 | `agent_blocked` | `prompt` | a dialog is on screen (see above) |
 | `agent_not_ready` | `start_agent` | the agent never reached a prompt-accepting state; surfaced as kind `not_ready` with the screen in the message |
@@ -123,4 +123,5 @@ times a day). The box never updates itself or herdr unasked: `pitupitu
 update [box|herdr|all]` and the `update` call show or say what changes,
 and run only on the person's yes. Sessions are not touched: the box
 agent's restart leaves herdr running, and `herdr update` leaves the
-running server and its panes as they are until it restarts.
+running server and its panes as they are until the person quits herdr
+and opens it again.
