@@ -1709,8 +1709,9 @@ fn offer_linger(path: &std::path::Path, choice: Option<bool>) -> Result<()> {
         None => {
             eprintln!();
             eprintln!(
-                "  pitupitu can keep working on this machine while you are logged out, so your \
-                 phone still reaches it, and it starts again by itself after a restart"
+                "  pitupitu can stay linked while you are logged out, so your phone still sees \
+                 this machine, and it links again by itself after a restart; your agents run \
+                 only while herdr is open"
             );
             let answer = ask_yes("Keep it running while you are logged out?", true);
             config::set(path, &[("setup", "linger_offered", "yes")])?;
