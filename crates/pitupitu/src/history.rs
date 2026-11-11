@@ -72,6 +72,8 @@ const TARGET_MAX: usize = 120;
 const TITLE_MAX: usize = 80;
 /// One session record, as JSON, at most (32 KB).
 const RECORD_MAX: usize = 32 * 1024;
+/// The most folders one session's log is remembered to have named.
+const FOLDERS_MAX: usize = 32;
 const COMMITS_MAX: usize = 50;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 const STATE_FILE: &str = "history.json";
@@ -453,6 +455,15 @@ fn codex_you(text: &str) -> Option<String> {
     }
 }
 
+/// The name Claude Code gives the folder under `~/.claude/projects` for
+/// sessions opened in `cwd`: every character other than an ASCII letter or
+/// digit made `-`.
+fn claude_folder_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// A session as read so far.
 #[derive(Debug)]
 struct Parsed {
@@ -460,7 +471,12 @@ struct Parsed {
     /// Bytes of the log read, up to the last whole line.
     offset: u64,
     id: Option<String>,
+    /// The first folder the log names.
     cwd: Option<String>,
+    /// Every folder the log names, in the order first named: a session
+    /// carried over from another machine names that machine's folder
+    /// first, and the agent's `cd` moves it on.
+    cwds: Vec<String>,
     started_at: Option<String>,
     last_at: Option<String>,
     title: Option<String>,
@@ -511,6 +527,7 @@ impl Parsed {
             offset: 0,
             id: None,
             cwd: None,
+            cwds: Vec::new(),
             started_at: None,
             last_at: None,
             title: None,
@@ -556,8 +573,13 @@ impl Parsed {
         if self.id.is_none() {
             self.id = id.filter(|s| !s.is_empty()).map(str::to_string);
         }
-        if self.cwd.is_none() {
-            self.cwd = cwd.filter(|c| c.starts_with('/')).map(str::to_string);
+        if let Some(c) = cwd.filter(|c| c.starts_with('/')) {
+            if self.cwd.is_none() {
+                self.cwd = Some(c.to_string());
+            }
+            if self.cwds.len() < FOLDERS_MAX && !self.cwds.iter().any(|k| k == c) {
+                self.cwds.push(c.to_string());
+            }
         }
         if let Some(at) = at.filter(|s| !s.is_empty()) {
             if self.started_at.is_none() {
@@ -565,6 +587,28 @@ impl Parsed {
             }
             self.last_at = Some(at.to_string());
         }
+    }
+
+    /// The session's folder on this machine: the one the log's own folder
+    /// is named after (Claude Code keeps a session's log in a folder named
+    /// after the folder it was opened in here), else the first that exists
+    /// here, else the first of all.
+    fn folder(&self, log: &Path) -> Option<String> {
+        let named = (self.agent == "claude")
+            .then(|| log.parent().and_then(Path::file_name))
+            .flatten()
+            .map(|n| n.to_string_lossy().into_owned());
+        if let Some(named) = named {
+            if let Some(c) = self.cwds.iter().find(|c| claude_folder_name(c) == named) {
+                return Some(c.clone());
+            }
+        }
+        self.cwds
+            .iter()
+            .find(|c| Path::new(c).is_dir())
+            .or(self.cwds.first())
+            .cloned()
+            .or_else(|| self.cwd.clone())
     }
 
     fn you(&mut self, at: &str, text: Option<String>) {
@@ -1149,7 +1193,7 @@ impl Reader {
             if p.total == 0 {
                 return None;
             }
-            let cwd = PathBuf::from(p.cwd.clone()?);
+            let cwd = PathBuf::from(p.folder(&log.path)?);
             let id = p.id.clone().or_else(|| {
                 log.path
                     .file_stem()
@@ -2191,6 +2235,53 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         r.git_cache.clear();
         assert_eq!(r.git_for(&tree), None);
+    }
+
+    /// A session carried over from another machine names that machine's
+    /// folder first; the record names this machine's.
+    #[test]
+    fn a_session_carried_over_names_this_machines_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let here = home.path().join("code/app");
+        let sub = here.join("site");
+        std::fs::create_dir_all(&sub).unwrap();
+        let entry = |cwd: &str, at: &str| {
+            json!({"type": "user", "isSidechain": false, "cwd": cwd, "sessionId": "s-9",
+                   "timestamp": at, "message": {"role": "user", "content": "go on"}})
+            .to_string()
+        };
+        let text = [
+            entry("/elsewhere/code/app", "2026-10-01T10:00:00.000Z"),
+            entry(&sub.display().to_string(), "2026-10-02T10:00:00.000Z"),
+            entry(&here.display().to_string(), "2026-10-02T10:01:00.000Z"),
+        ]
+        .join("\n");
+        let p = parse("claude", &text);
+        assert_eq!(p.cwd.as_deref(), Some("/elsewhere/code/app"));
+
+        // The log's own folder is named after where it was opened here.
+        let named = home
+            .path()
+            .join(".claude/projects")
+            .join(claude_folder_name(&here.display().to_string()))
+            .join("s-9.jsonl");
+        assert_eq!(p.folder(&named), Some(here.display().to_string()));
+
+        // Without that: the first folder that exists here.
+        let other = home.path().join(".claude/projects/-x/s-9.jsonl");
+        assert_eq!(p.folder(&other), Some(sub.display().to_string()));
+
+        // None exists here: the first of all.
+        std::fs::remove_dir_all(&here).unwrap();
+        assert_eq!(p.folder(&other), Some("/elsewhere/code/app".to_string()));
+    }
+
+    #[test]
+    fn claude_names_a_folder_with_dashes() {
+        assert_eq!(
+            claude_folder_name("/Users/me/github.com/org/app_x"),
+            "-Users-me-github-com-org-app-x"
+        );
     }
 
     #[test]
