@@ -185,6 +185,8 @@ async fn herdr_passes_the_scenario() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
+    // herdr reports the resolved path (macOS: /var is /private/var).
+    let cwd = dir.path().canonicalize().unwrap();
     let session = format!("pitutest-conf-{}", std::process::id());
     let _scratch = Scratch(session.clone());
     let host = HerdrCli::new().with_session(&session);
@@ -208,7 +210,7 @@ async fn herdr_passes_the_scenario() {
     let name = format!("conf-{}", std::process::id());
     scenario(
         &host,
-        dir.path(),
+        &cwd,
         &name,
         Script {
             kind: "claude",
