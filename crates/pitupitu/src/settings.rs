@@ -1,9 +1,9 @@
 //! The account's settings from this box: `pitupitu prefs`, `box`,
 //! `default` and `settings`, over `GET`/`PATCH /v1/settings` with this
 //! box's key. The preferences are what the person tells pitupitu about
-//! themselves and their machines; the voice foreman reads them in every
+//! themselves and their machines; the voice assistant reads them in every
 //! conversation. `note`, `agent`, on/off (`enabled`) and `history` are
-//! this box's own; `updates` is what the foreman brings up between turns
+//! this box's own; `updates` is what the assistant brings up between turns
 //! unasked.
 
 use crate::config::Config;

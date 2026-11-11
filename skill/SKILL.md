@@ -8,7 +8,7 @@ metadata:
 
 # pitupitu
 
-pitupitu lets the person talk (in the iPhone or Android app, or on https://pitupitu.chat in any browser) to a voice foreman that starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents run in herdr (a terminal workspace manager for coding agents): the person opens `herdr` on that machine to see the same sessions their phone sees. The agents are the person's own `claude`, `codex` and others, signed in by the person; pitupitu never handles their credentials, and neither should you.
+pitupitu lets the person talk (in the iPhone or Android app, or on https://pitupitu.chat in any browser) to a voice assistant that orchestrates their coding agents (Claude Code, Codex and others): it starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents run in herdr (a terminal workspace manager for coding agents): the person opens `herdr` on that machine to see the same sessions their phone sees. The agents are the person's own `claude`, `codex` and others, signed in by the person; pitupitu never handles their credentials, and neither should you.
 
 ## Install and link this machine
 
@@ -24,14 +24,14 @@ If the person's agents are not logged in yet, tell them to run `claude` (or `cod
 Every command takes `--json` and never prompts when there is no terminal.
 
 - `pitupitu settings`: everything at once (preferences, default machine, voice, every machine with its note, agent and history).
-- `pitupitu prefs` / `pitupitu prefs show`: the preferences, the text the voice foreman reads in every conversation: who the person is, what runs where, how they like to work. Keep it short, one fact per line.
+- `pitupitu prefs` / `pitupitu prefs show`: the preferences, the text the voice assistant reads in every conversation: who the person is, what runs where, how they like to work. Keep it short, one fact per line.
 - `pitupitu prefs set <file>` (or `-` for stdin), `pitupitu prefs clear`. `pitupitu prefs edit` opens an editor (a person at a terminal only).
 - `pitupitu box note "<one line>"`: describe this machine ("client work, Acme"). `pitupitu box note --clear`.
 - `pitupitu box history on|off`: whether pitupitu reads what the person's agents did on this machine (their prompts, the gist of the agents' replies, which files and commands were touched, commits; never file contents, command output or keys) to summarise their work. On by default. Switching it off is always fine.
 - `pitupitu box rename <name>`: the name the person uses for this machine when they talk ("on the mac, …"); it relinks under the new name by itself.
 - `pitupitu box on` / `pitupitu box off`: a box switched off stays linked, but pitupitu starts nothing there and ignores its sessions until it is on again ("ignore the laptop for now").
 - `pitupitu default <machine>` / `pitupitu default --clear`: the machine used when a request does not say which.
-- `pitupitu updates mine|all|quiet`: what the voice foreman brings up between turns unasked. `mine` (default): the followed sessions (its own tasks, and the person's own once followed); `all`: every session; `quiet`: nothing unless asked.
+- `pitupitu updates mine|all|quiet`: what the voice assistant brings up between turns unasked. `mine` (default): the followed sessions (its own tasks, and the person's own once followed); `all`: every session; `quiet`: nothing unless asked.
 - `pitupitu agent claude|codex|kiro|opencode|auto`: the agent a session gets when the person does not say; any agent herdr can start works the same (`pi`, `qwen`, `cline`, `kilo`, `agy`, …); `auto`: the one the machine has, and with several pitupitu asks. `pitupitu box agent claude|codex|kiro|opencode|auto`: this machine's own default over the account's.
 - `pitupitu model claude opus` / `pitupitu model codex gpt-5` / `pitupitu model claude --clear`: the model that agent runs on when the person does not say, as the CLI names it.
 - `pitupitu follow` / `pitupitu unfollow`: follow a session, so pitupitu tells the person when it finishes or needs them, or stop. With nothing after it, the session the command runs in (it must run inside herdr); or name one by words from its title or by its id (`pitupitu follow login page`). `pitupitu follow --off` is the same as `unfollow`.
