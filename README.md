@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://pitupitu.chat"><img src="assets/banner.png" alt="pitupitu: talk to your agents. Start, check on and unblock Claude Code and Codex by voice, from your phone, on any of your machines." width="100%"></a>
+  <a href="https://pitupitu.chat"><img src="assets/banner.png" alt="pitupitu: call your agents. Phone pitupitu, or talk in the app or any browser: Claude Code, Codex and more, on any of your machines." width="100%"></a>
 </p>
 
 <h1 align="center">pitupitu</h1>
