@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the iPhone or Android app or any browser.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the iPhone or Android app or any browser, or by phoning pitupitu.<br>
   Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
@@ -40,6 +40,8 @@
 
 You say what you want done and where. pitupitu starts the agent session on that machine, keeps an eye on it, answers what it can, and tells you when it is done or needs you. In the car, on a walk, at the desk: the same sessions, from your phone or any browser.
 
+Or phone it. Add your number once, tap Call in the app or on the page, and talk as you would on the screen: the same assistant, the same conversation, hands-free. There are numbers in the US, the EU and the UK, listed on [pitupitu.chat](https://pitupitu.chat/#phone).
+
 pitupitu runs your agents in [Herdr TUI](https://herdr.dev/tui), herdr's terminal app: a terminal workspace manager for coding agents, the `herdr` command. Open `herdr` on that machine and you see exactly what your phone sees: the same sessions, live, to watch or type into at the desk. herdr has to be open on that machine for pitupitu to reach your agents: you open it in a terminal and leave it open, and pitupitu connects to it. If it is not installed, `pitupitu setup` offers to install it. The Herdr desktop app is a separate program on its own runtime: pitupitu does not use it, and sessions pitupitu starts do not appear in it.
 
 This repository is the part that runs on each of your machines: a small Rust agent that links the machine to pitupitu cloud over one outbound WebSocket. The conversation, the voice, the apps and the page at [pitupitu.chat](https://pitupitu.chat) are the hosted service.
@@ -69,14 +71,14 @@ curl -fsSL https://pitupitu.chat/install | sh   # or: brew install klarluft/tap/
 pitupitu setup                                  # sign in with a code, pick a folder, start the service
 ```
 
-Then open the [iPhone or Android app](#apps), or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser, and say what you want done. You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
+Then open the [iPhone or Android app](#apps), or [pitupitu.chat/app](https://pitupitu.chat/app) in any browser, and say what you want done, or [phone pitupitu](https://pitupitu.chat/#phone). You need a coding agent installed and signed in on that machine (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, or another agent herdr runs); pitupitu never touches their logins. For Kilo Code, use its own installer (`curl -fsSL https://kilo.ai/cli/install | bash`): the npm package runs under a name herdr does not recognise yet.
 
 ## How it works
 
 ```
-phone / browser ──▶ pitupitu.chat (cloud) ◀── box link (outbound WebSocket) ── pitupitu ──▶ herdr ──▶ your agents
-                                                                                              ▲
-                                                                   you, at the desk: `herdr` ─┘
+app / browser / call ──▶ pitupitu.chat (cloud) ◀── box link (outbound WebSocket) ── pitupitu ──▶ herdr ──▶ your agents
+                                                                                                   ▲
+                                                                        you, at the desk: `herdr` ─┘
 ```
 
 - The box agent **dials out** to `wss://api.pitupitu.chat/v1/box`. Nothing connects in: no open port, no VPN, no certificate on your machine.

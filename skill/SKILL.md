@@ -8,7 +8,7 @@ metadata:
 
 # pitupitu
 
-pitupitu lets the person talk (in the iPhone or Android app, or on https://pitupitu.chat in any browser) to a voice assistant that orchestrates their coding agents (Claude Code, Codex and others): it starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents run in herdr (a terminal workspace manager for coding agents): the person opens `herdr` on that machine to see the same sessions their phone sees. The agents are the person's own `claude`, `codex` and others, signed in by the person; pitupitu never handles their credentials, and neither should you.
+pitupitu lets the person talk (in the iPhone or Android app, on https://pitupitu.chat in any browser, or by phoning it) to a voice assistant that orchestrates their coding agents (Claude Code, Codex and others): it starts, watches and answers agent sessions on their machines. Each machine runs the small open-source `pitupitu` box agent, which links it to pitupitu cloud. The agents run in herdr (a terminal workspace manager for coding agents): the person opens `herdr` on that machine to see the same sessions their phone sees. The agents are the person's own `claude`, `codex` and others, signed in by the person; pitupitu never handles their credentials, and neither should you.
 
 ## Install and link this machine
 
@@ -64,4 +64,4 @@ pitupitu keeps this skill in step with itself: setup installs it for the agents 
 
 ## Not here
 
-The conversation and voice are in the iPhone and Android apps and on https://pitupitu.chat; minutes and billing are on the site (`/app/account`). Removing the service: `pitupitu uninstall` (herdr stays). Driving herdr itself (its panes and agents) is herdr's own skill, `herdr --skill`, not this one.
+The conversation and voice are in the iPhone and Android apps, on https://pitupitu.chat and on a phone call (the numbers are on https://pitupitu.chat; a number is added once on the Call screen, in the app or on the page); minutes and billing are on the site (`/app/billing`). Removing the service: `pitupitu uninstall` (herdr stays). Driving herdr itself (its panes and agents) is herdr's own skill, `herdr --skill`, not this one.
