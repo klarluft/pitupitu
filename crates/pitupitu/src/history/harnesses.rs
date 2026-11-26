@@ -1,7 +1,7 @@
 //! The logs of the harnesses besides Claude Code and Codex: Kiro CLI, pi
 //! and Qwen Code (JSONL, read on line by line as Claude Code's and Codex's
-//! are), Cline (one JSON document it rewrites, read whole), OpenCode and
-//! Kilo Code (a SQLite database, a session read whole), Antigravity and
+//! are), Cline (one JSON document it rewrites, read whole), OpenCode,
+//! Kilo Code and Hermes Agent (a SQLite database, a session read whole), Antigravity and
 //! Maki (JSONL, read whole each time). Each gives the
 //! same turns: what the person typed, the agent's text, and a tool call's
 //! name and one target. Never thinking, tool results or file contents.
@@ -413,15 +413,16 @@ impl Parsed {
         Ok(())
     }
 
-    /// One session of OpenCode's or Kilo Code's database, named
-    /// `<database>#<id>`: the person's `text` parts and the agent's `text`
-    /// and `tool` parts (the tool and its input; its output is not even
-    /// taken out of the database). Parts the harness added (`synthetic`,
-    /// `ignored`), reasoning and step records are skipped.
+    /// One session of OpenCode's, Kilo Code's or Hermes Agent's
+    /// database, named `<database>#<id>`: the person's `text` parts and the
+    /// agent's `text` and `tool` parts (the tool and its input; its output
+    /// is not even taken out of the database). Parts the harness added
+    /// (`synthetic`, `ignored`, Hermes's compaction summary), reasoning and
+    /// step records are skipped.
     pub(super) fn read_db(&mut self, name: &Path) -> std::io::Result<()> {
         let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
         let (db, id) = logs::split_db_path(name).ok_or_else(not_found)?;
-        let s = logs::db_session(&db, &id)
+        let s = logs::db_session(&db, self.agent, &id)
             .map_err(std::io::Error::other)?
             .ok_or_else(not_found)?;
         let created = (s.created > 0).then(|| rfc3339_ms(s.created));
@@ -1204,6 +1205,165 @@ mod tests {
         assert!(!logs::list(home.path()).iter().any(|l| l.path == sub));
     }
 
+    /// A made-up Hermes Agent store: a terminal session with a prompt, a
+    /// tool call (its result and reasoning beside it), a prompt it took
+    /// back, its compaction summary and the reply; and sessions that are
+    /// not the person's terminal work (a subagent's, its Telegram chat, a
+    /// scheduled job, an archived one). `newer`: the schema of Hermes 0.20
+    /// and later, with a hidden notice and JSON content; else 0.19's.
+    pub(crate) fn hermes_db(home: &Path, cwd: &str, at: f64, newer: bool) -> PathBuf {
+        let db = home.join(".hermes/state.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let c = rusqlite::Connection::open(&db).unwrap();
+        let (s_more, m_more) = if newer {
+            (
+                ", hidden INTEGER NOT NULL DEFAULT 0",
+                ", display_kind TEXT, _compressed_summary INTEGER NOT NULL DEFAULT 0",
+            )
+        } else {
+            ("", "")
+        };
+        c.execute_batch(&format!(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT,
+                system_prompt TEXT, parent_session_id TEXT, started_at REAL NOT NULL,
+                ended_at REAL, cwd TEXT, title TEXT, archived INTEGER NOT NULL DEFAULT 0{s_more});
+             CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT,
+                timestamp REAL NOT NULL, reasoning TEXT, active INTEGER NOT NULL DEFAULT 1,
+                compacted INTEGER NOT NULL DEFAULT 0{m_more});"
+        ))
+        .unwrap();
+        let session = |id: &str, source: &str, parent: Option<&str>, archived: i64| {
+            c.execute(
+                "INSERT INTO sessions (id, source, system_prompt, parent_session_id, started_at,
+                    cwd, title, archived) VALUES (?1, ?2, 'SYSTEM PROMPT', ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, source, parent, at, cwd, "Water the meadow", archived],
+            )
+            .unwrap();
+        };
+        session("20261126_101500_a1b2c3", "cli", None, 0);
+        session(
+            "20261126_101501_sub",
+            "cli",
+            Some("20261126_101500_a1b2c3"),
+            0,
+        );
+        session("20261126_101502_tg", "telegram", None, 0);
+        session("20261126_101503_cron", "cron", None, 0);
+        session("20261126_101504_old", "cli", None, 1);
+        let msg =
+            |id: &str, role: &str, t: f64, content: &str, calls: Option<Value>, active: i64| {
+                c.execute(
+                    "INSERT INTO messages (session_id, role, content, tool_calls, timestamp,
+                    reasoning, active) VALUES (?1, ?2, ?3, ?4, ?5, 'MUSING', ?6)",
+                    rusqlite::params![id, role, content, calls.map(|v| v.to_string()), t, active],
+                )
+                .unwrap();
+            };
+        let h = "20261126_101500_a1b2c3";
+        msg(h, "session_meta", at, "SYSTEM PROMPT", None, 1);
+        msg(
+            h,
+            "user",
+            at,
+            "Water the meadow, Bearer abcdefghijklmnop1234",
+            None,
+            1,
+        );
+        let args = |v: Value| Value::String(v.to_string());
+        msg(
+            h,
+            "assistant",
+            at + 1.0,
+            "",
+            Some(json!([
+                {"id": "c1", "type": "function", "function": {"name": "terminal",
+                    "arguments": args(json!({"command": "water --meadow"}))}},
+                {"id": "c2", "type": "function", "function": {"name": "write_file",
+                    "arguments": args(json!({"path": "/meadow/log.md", "content": "FILE BODY"}))}},
+                {"id": "c3", "type": "function", "function": {"name": "execute_code",
+                    "arguments": args(json!({"code": "FILE BODY"}))}}
+            ])),
+            1,
+        );
+        msg(h, "tool", at + 2.0, "TOOL OUTPUT", None, 1);
+        msg(h, "user", at + 2.5, "Taken back", None, 0);
+        msg(
+            h,
+            "user",
+            at + 2.6,
+            "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns: ADDED CONTEXT",
+            None,
+            1,
+        );
+        msg(h, "assistant", at + 3.0, "The meadow is watered.", None, 1);
+        if newer {
+            msg(h, "user", at + 4.0, "\0json:[{\"type\":\"text\",\"text\":\"And the fence\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"FILE BODY\"}}]", None, 1);
+            c.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp, display_kind)
+                    VALUES (?1, 'user', 'ADDED CONTEXT', ?2, 'completion_note')",
+                rusqlite::params![h, at + 4.5],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp, _compressed_summary)
+                    VALUES (?1, 'assistant', 'MEMORY', ?2, 1)",
+                rusqlite::params![h, at + 4.6],
+            )
+            .unwrap();
+        }
+        for other in [
+            "20261126_101501_sub",
+            "20261126_101502_tg",
+            "20261126_101503_cron",
+            "20261126_101504_old",
+        ] {
+            msg(other, "user", at, "NOT TERMINAL WORK", None, 1);
+        }
+        db
+    }
+
+    #[test]
+    fn a_hermes_session_becomes_turns() {
+        for newer in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let db = hermes_db(home.path(), "/meadow", 1_791_100_000.0, newer);
+            let name = logs::db_path(&db, "20261126_101500_a1b2c3");
+            let p = read("hermes", &name);
+            assert_eq!(p.id.as_deref(), Some("20261126_101500_a1b2c3"));
+            assert_eq!(p.cwd.as_deref(), Some("/meadow"));
+            assert_eq!(p.title.as_deref(), Some("Water the meadow"));
+            assert_eq!(p.started_at.as_deref(), Some("2026-10-04T07:46:40.000Z"));
+            let mut want = vec![
+                "you: Water the meadow, Bearer [redacted]",
+                "tool: terminal water --meadow",
+                "tool: write_file /meadow/log.md",
+                "tool: execute_code -",
+                "agent: The meadow is watered.",
+            ];
+            if newer {
+                want.push("you: And the fence");
+            }
+            assert_eq!(turns(&p), want, "newer: {newer}");
+            never_sent(&p);
+            let sent = serde_json::to_string(&p.turns).unwrap();
+            assert!(!sent.contains("Taken back") && !sent.contains("NOT TERMINAL WORK"));
+            let r = last_reply(&name, "hermes").unwrap();
+            assert_eq!(r.text, "The meadow is watered.");
+            // Only terminal sessions of the person's own are listed.
+            let ids: Vec<String> = logs::list(home.path())
+                .into_iter()
+                .filter(|l| l.agent == "hermes")
+                .map(|l| logs::split_db_path(&l.path).unwrap().1)
+                .collect();
+            assert_eq!(ids, ["20261126_101500_a1b2c3"]);
+            for other in ["20261126_101501_sub", "20261126_101502_tg"] {
+                let n = logs::db_path(&db, other);
+                assert!(matches!(last_reply(&n, "hermes"), Err(NoReply::NoLog(_))));
+            }
+        }
+    }
+
     /// The reader sends every harness's sessions, a database's again when
     /// it changed.
     #[test]
@@ -1253,6 +1413,7 @@ mod tests {
             ".local/state/maki/sessions/3vQB7B6MrGQZaxCuFg4oh.jsonl",
             &maki_log().replace("/meadow", w),
         );
+        hermes_db(h, w, unix(SystemTime::now()) as f64 / 1000.0, true);
         let db = opencode_db(h, ".local/share/kilo/kilo.db", w);
         // Written just now, as a live session would be.
         let now = unix(SystemTime::now()) as i64;
@@ -1284,6 +1445,7 @@ mod tests {
             [
                 ("agy".into(), agy.into()),
                 ("cline".into(), "1791000000000_abcde".into()),
+                ("hermes".into(), "20261126_101500_a1b2c3".into()),
                 ("kilo".into(), "ses_o1".into()),
                 ("kiro".into(), "sess_k-1".into()),
                 ("maki".into(), "3vQB7B6MrGQZaxCuFg4oh".into()),

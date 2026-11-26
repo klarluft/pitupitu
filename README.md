@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the iPhone or Android app or any browser, or by phoning pitupitu.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, Hermes Agent and others) by voice, from the iPhone or Android app or any browser, or by phoning pitupitu.<br>
   Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
@@ -182,6 +182,7 @@ What is read: your agents' own session logs on this machine, the sessions of the
 - OpenCode and Kilo Code: the `session`, `message` and `part` tables of `~/.local/share/opencode/opencode.db` and `~/.local/share/kilo/kilo.db`, opened read-only; no other table of those databases is ever queried
 - Antigravity: `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl`, and of `conversation_summaries.db` beside `brain`, opened read-only, each conversation's folder and title
 - Maki: `~/.local/state/maki/sessions/*.jsonl` (or `~/.maki/sessions/*.jsonl`)
+- Hermes Agent: the `sessions` and `messages` tables of `~/.hermes/state.db`, opened read-only, and only the sessions it ran in a terminal (not its messaging gateway's chats, its scheduled jobs or its subagents)
 
 What is sent:
 

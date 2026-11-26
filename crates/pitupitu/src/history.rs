@@ -285,6 +285,10 @@ const FILE_TOOLS: &[&str] = &[
     "write",
     "read",
     "editor",
+    // Hermes Agent's.
+    "read_file",
+    "write_file",
+    "patch",
 ];
 /// Tools whose target is the command they run.
 const SHELL_TOOLS: &[&str] = &[
@@ -298,6 +302,8 @@ const SHELL_TOOLS: &[&str] = &[
     "bash",
     "run_shell_command",
     "execute_bash",
+    // Hermes Agent's.
+    "terminal",
 ];
 /// Arguments that hold file contents or edits: never a target.
 const CONTENT_ARGS: &[&str] = &[
@@ -322,6 +328,8 @@ const CONTENT_ARGS: &[&str] = &[
     "new_str",
     "old_str",
     "diff",
+    // Hermes Agent's `execute_code`.
+    "code",
 ];
 
 /// A command as one string: an argv's last element after `-c`/`-lc`
@@ -639,7 +647,7 @@ impl Parsed {
     fn load(&mut self, path: &Path) -> std::io::Result<()> {
         match self.agent {
             "cline" => self.read_cline(path),
-            "opencode" | "kilo" => self.read_db(path),
+            "opencode" | "kilo" | "hermes" => self.read_db(path),
             "kiro" => {
                 self.read(path)?;
                 self.kiro_session(path);
@@ -1178,7 +1186,8 @@ impl Reader {
         // Logs only appended to are read on from where they were left;
         // Cline's, Maki's and Antigravity's (rewritten, or not known to be
         // only appended to) and a database's are read whole.
-        let appended = !matches!(log.agent, "cline" | "opencode" | "kilo" | "agy" | "maki");
+        let appended =
+            !matches!(log.agent, "cline" | "agy" | "maki") && !logs::in_database(log.agent);
         let mut p = self
             .open
             .remove(&log.path)
@@ -1528,7 +1537,7 @@ fn safe_id(id: &str) -> bool {
 
 /// The agents whose logs the box reads, by herdr's names for them.
 const READ: &[&str] = &[
-    "claude", "codex", "kiro", "pi", "qwen", "cline", "opencode", "kilo", "agy", "maki",
+    "claude", "codex", "kiro", "pi", "qwen", "cline", "opencode", "kilo", "agy", "maki", "hermes",
 ];
 
 /// For an agent herdr reports no session for, a log of that agent in the
@@ -1557,7 +1566,7 @@ fn is_session(log: &logs::LogRef, id: &str) -> bool {
                 let d = d.to_string_lossy();
                 d == id || d.strip_prefix("sess_") == Some(id)
             }),
-        "opencode" | "kilo" => logs::split_db_path(&log.path).is_some_and(|(_, s)| s == id),
+        a if logs::in_database(a) => logs::split_db_path(&log.path).is_some_and(|(_, s)| s == id),
         _ => false,
     }
 }
@@ -1619,7 +1628,7 @@ pub fn find_log(
             .max_by_key(|l| l.modified)
             .map(|l| l.path),
         // A database session is not a file of its own.
-        "path" if !matches!(agent, "opencode" | "kilo") => {
+        "path" if !logs::in_database(agent) => {
             let want = Path::new(&session.value);
             files().map(|l| l.path).find(|p| p == want)
         }

@@ -1,6 +1,6 @@
 ---
 name: pitupitu
-description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), show a session in herdr on its machine, note something for later on their list, set a reminder, schedule a session, or check pitupitu's status.
+description: Install, sign in and configure pitupitu, the voice app that lets a person talk to their coding agents (Claude Code, Codex, Hermes Agent and others) on this and their other machines. Use when the person asks to set up pitupitu, link this machine, change what pitupitu knows about them, name or describe this machine, choose the default machine, follow a session (be told when it finishes or needs them), show a session in herdr on its machine, note something for later on their list, set a reminder, schedule a session, or check pitupitu's status.
 metadata:
   managed-by: pitupitu
   version: "{{version}}"
