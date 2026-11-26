@@ -2,9 +2,9 @@
 //! configure pitupitu for them (`skill/SKILL.md`, the Agent Skills format).
 //! `pitupitu --skill` prints it; `pitupitu skill install` puts it where
 //! the agents look for skills (Claude Code's and Codex's own folders, Kiro
-//! CLI's, and `~/.agents/skills`, which OpenCode, Kilo Code, pi, Qwen Code
-//! and Cline read), and [`sync`] keeps those copies in step with this
-//! binary.
+//! CLI's, Hermes Agent's, and `~/.agents/skills`, which OpenCode, Kilo Code,
+//! pi, Qwen Code and Cline read), and [`sync`] keeps those copies in step
+//! with this binary.
 //!
 //! A copy pitupitu wrote carries `managed-by: pitupitu` in its frontmatter's
 //! `metadata`, with the version that wrote it. Only such a copy is ever
@@ -44,6 +44,9 @@ const AGENTS: &[(&str, &str, &[&str])] = &[
     ("Claude Code", ".claude", &[]),
     ("Codex", ".codex", &[]),
     ("Kiro CLI", ".kiro", &[]),
+    // Hermes reads `~/.hermes/skills`, at any depth; `~/.agents/skills` only
+    // when the person adds it to its `skills.external_dirs`.
+    ("Hermes Agent", ".hermes", &[]),
     (
         "OpenCode, Kilo Code, pi, Qwen Code and Cline",
         ".agents",
@@ -252,7 +255,8 @@ mod tests {
             done,
             [
                 Outcome::Written(copy_at(home, ".codex")),
-                Outcome::Written(copy_at(home, ".kiro"))
+                Outcome::Written(copy_at(home, ".kiro")),
+                Outcome::Written(copy_at(home, ".hermes"))
             ]
         );
         for c in status(home) {
@@ -285,6 +289,7 @@ mod tests {
             [
                 State::Outdated,
                 State::Unmanaged,
+                State::Current,
                 State::Current,
                 State::Current
             ]
