@@ -231,14 +231,19 @@ impl HerdrCli {
     }
 
     /// A prompt typed while the agent was still getting ready can stay in
-    /// its input box, its Enter lost (Hermes Agent, about one start in
-    /// six, when herdr saw it ready early). When the agent has not changed
-    /// state for `wait` since the prompt and the prompt's start is still on
-    /// its last lines, Enter is pressed once more. Otherwise, the usual
-    /// case, it returns as soon as the agent changes state.
+    /// its input box, its Enter lost (Hermes Agent 0.19, about one start in
+    /// six, when herdr saw it ready early). When, for `wait` after the
+    /// prompt, the agent has not changed state and its screen has not
+    /// changed apart from digits (a clock), and the prompt's start is on its
+    /// last lines, Enter is pressed once more. A screen that moves is an
+    /// agent at work that herdr has not seen working (Hermes 0.23, whose
+    /// Enter would then break into the turn): left alone. Otherwise, the
+    /// usual case, it returns as soon as the agent changes state.
     pub(crate) async fn submit_if_left(&self, agent: &str, head: &str, seq: u64, wait: Duration) {
         let end = std::time::Instant::now() + wait;
-        loop {
+        let mut first: Option<String> = None;
+        let mut looks = 0;
+        let screen = loop {
             tokio::time::sleep(wait / 6).await;
             let Ok(now) = self.agent(agent).await else {
                 return;
@@ -246,19 +251,29 @@ impl HerdrCli {
             if now.state_change_seq != seq || !now.agent_status.is_ready() {
                 return;
             }
-            if std::time::Instant::now() >= end {
-                break;
+            let Ok(s) = self
+                .run_text(&[
+                    "agent", "read", agent, "--source", "visible", "--lines", "40",
+                ])
+                .await
+            else {
+                return;
+            };
+            let still: String = s.chars().filter(|c| !c.is_ascii_digit()).collect();
+            match &first {
+                None => first = Some(still),
+                Some(f) if *f != still => return,
+                Some(_) => {}
             }
-        }
-        let Ok(screen) = self
-            .run_text(&[
-                "agent", "read", agent, "--source", "visible", "--lines", "6",
-            ])
-            .await
-        else {
-            return;
+            looks += 1;
+            // Two looks at least, so a screen that moves is seen moving.
+            if std::time::Instant::now() >= end && looks >= 2 {
+                break s;
+            }
         };
-        if screen.lines().any(|l| l.contains(head)) {
+        let lines: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
+        let last = &lines[lines.len().saturating_sub(6)..];
+        if last.iter().any(|l| l.contains(head)) {
             tracing::info!(agent, "the prompt stayed in the input box; pressing Enter");
             let _ = self.send_keys(agent, &["enter"]).await;
         }
@@ -901,6 +916,30 @@ mod prompt_tests {
         let (bin, log) = fake_herdr("\nppbench ❯ \n");
         let cli = HerdrCli::with_binary(bin.display().to_string());
         cli.submit_if_left("n", &head, 3, Duration::from_millis(60))
+            .await;
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(!log.contains("send-keys"), "{log}");
+
+        // Herdr says idle but the screen moves (a spinner): at work, left
+        // alone.
+        let (bin, log) = fake_herdr("\n❯ Reply with exactly the word OK\n── Working…\n");
+        let screen = log.with_file_name("screen");
+        let spin = format!(
+            "#!/bin/sh\n[ \"$2\" = read ] || exec '{1}' \"$@\"\n\
+             n=$(cat '{0}.n' 2>/dev/null || echo 0); echo $((n+1)) > '{0}.n'\n\
+             if [ $((n % 2)) = 0 ]; then sed -i.bak 's/Working…/Working… ⠋/' '{0}'; \
+             else sed -i.bak 's/ ⠋//' '{0}'; fi\nexec '{1}' \"$@\"\n",
+            screen.display(),
+            bin.display()
+        );
+        let wrapper = bin.with_file_name("herdr-spin");
+        std::fs::write(&wrapper, spin).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let cli = HerdrCli::with_binary(wrapper.display().to_string());
+        cli.submit_if_left("n", &head, 3, Duration::from_millis(120))
             .await;
         let log = std::fs::read_to_string(&log).unwrap();
         assert!(!log.contains("send-keys"), "{log}");

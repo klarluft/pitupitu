@@ -58,10 +58,12 @@ treats no change within a few seconds as a prompt that did not land.
 
 One case the box mends itself: a prompt typed while the agent was still
 getting ready can stay in its input box with its Enter lost (Hermes Agent,
-about one start in six, when herdr saw it ready early). When the agent has
-not changed state for 3 seconds after the prompt and the prompt's first
-words are still on its last lines, the box presses Enter once more. It never
-types the prompt again.
+0.19, about one start in six, when herdr saw it ready early). When, for 3
+seconds after the prompt, the agent has not changed state and its screen has
+not changed apart from digits (a clock), and the prompt's first words are on
+its last lines, the box presses Enter once more. A screen that moves is an
+agent at work that herdr has not seen working (Hermes 0.23, where Enter
+breaks into the turn), and is left alone. It never types the prompt again.
 
 ## Dialogs: idle is not permission
 
