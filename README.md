@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Talk to your coding agents, on any of your machines.</b><br>
-  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code and others) by voice, from the iPhone or Android app or any browser, or by phoning pitupitu.<br>
+  Start, check on and unblock your coding agents (Claude Code, Codex, Kiro CLI, OpenCode, pi, Qwen Code, Cline, Kilo Code, Hermes Agent and others) by voice, from the iPhone or Android app or any browser, or by phoning pitupitu.<br>
   Your agents run on the subscriptions you already pay for: Claude Code on your Claude plan, Codex on your ChatGPT plan. No API keys.<br>
   This is the open-source agent that links each of your machines to <a href="https://pitupitu.chat">pitupitu</a>.
 </p>
