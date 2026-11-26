@@ -24,6 +24,11 @@
 //!   that table does not name, or names as a subagent's, is not listed.
 //! - Maki: `~/.local/state/maki/sessions/<id>.jsonl`, or
 //!   `~/.maki/sessions/<id>.jsonl` where that older folder exists.
+//! - Hermes Agent: its SQLite store, `~/.hermes/state.db`, opened
+//!   read-only, only its `sessions` and `messages` tables. Only sessions
+//!   it ran in a terminal (`cli`, `tui`) are listed, never those of its
+//!   messaging gateway or its scheduled jobs, nor a subagent's. Named
+//!   `<database>#<session id>` as OpenCode's are.
 //!
 //! Nothing else under those folders is opened: not the agents' settings,
 //! their credentials, or their process registries.
@@ -54,7 +59,7 @@ const AGY_TRANSCRIPT: &str = ".system_generated/logs/transcript.jsonl";
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LogRef {
     /// `claude`, `codex`, `kiro`, `pi`, `qwen`, `cline`, `opencode`,
-    /// `kilo`, `agy` or `maki`: herdr's name for the agent.
+    /// `kilo`, `agy`, `maki` or `hermes`: herdr's name for the agent.
     pub agent: &'static str,
     /// The file, or `<database>#<session id>` for a database session.
     pub path: PathBuf,
@@ -135,14 +140,33 @@ pub(crate) fn list(home: &Path) -> Vec<LogRef> {
     logs
 }
 
-/// OpenCode's and Kilo Code's databases under `home`.
-pub(crate) fn databases(home: &Path) -> [(&'static str, PathBuf); 2] {
+/// OpenCode's, Kilo Code's and Hermes Agent's databases under `home`.
+pub(crate) fn databases(home: &Path) -> [(&'static str, PathBuf); 3] {
     let data = home.join(".local/share");
     [
         ("opencode", data.join("opencode/opencode.db")),
         ("kilo", data.join("kilo/kilo.db")),
+        ("hermes", home.join(".hermes/state.db")),
     ]
 }
+
+/// The agents whose sessions live in a database.
+pub(crate) fn in_database(agent: &str) -> bool {
+    matches!(agent, "opencode" | "kilo" | "hermes")
+}
+
+/// Where Hermes Agent's sessions come from that ran in a terminal: its
+/// classic CLI and its TUI. Its messaging gateway's chats, scheduled jobs
+/// and subagents are other sources, never listed.
+const HERMES_SOURCES: &str = "'cli', 'tui'";
+
+/// Text Hermes puts in a conversation itself: the summary that replaces
+/// turns it compacted.
+const HERMES_ADDED: &[&str] = &["[CONTEXT COMPACTION", "[CONTEXT SUMMARY]"];
+
+/// What marks a stored message whose content is JSON (Hermes 0.20 and
+/// later): the rest is the content.
+const HERMES_JSON: &str = "\0json:";
 
 fn dirs_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
     std::fs::read_dir(dir)
@@ -450,6 +474,9 @@ fn db_sessions(db: &Path, agent: &'static str) -> Vec<LogRef> {
 }
 
 fn query_sessions(db: &Path, agent: &'static str) -> rusqlite::Result<Vec<LogRef>> {
+    if agent == "hermes" {
+        return hermes_sessions(db);
+    }
     let c = open_db(db)?;
     let mut q = c.prepare(
         "SELECT s.id, s.directory, s.time_updated,
@@ -516,7 +543,10 @@ pub(crate) struct DbSession {
 
 /// Read one session of a database. Only the fields named here are taken
 /// out of the parts' JSON; tool output stays in the database.
-pub(crate) fn db_session(db: &Path, id: &str) -> rusqlite::Result<Option<DbSession>> {
+pub(crate) fn db_session(db: &Path, agent: &str, id: &str) -> rusqlite::Result<Option<DbSession>> {
+    if agent == "hermes" {
+        return hermes_session(db, id);
+    }
     let c = open_db(db)?;
     let head = c
         .query_row(
@@ -569,6 +599,185 @@ pub(crate) fn db_session(db: &Path, id: &str) -> rusqlite::Result<Option<DbSessi
         cwd,
         title,
         created: created.max(0) as u64,
+        parts,
+    }))
+}
+
+/// The columns of a table, for a store whose schema grows between
+/// versions (Hermes's).
+fn columns(c: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut q = c.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = q.query_map([], |r| r.get::<_, String>(1))?;
+    names.collect()
+}
+
+/// `AND <column> = 0` for each of `flags` the table has.
+fn unset(have: &[String], alias: &str, flags: &[&str]) -> String {
+    flags
+        .iter()
+        .filter(|f| have.iter().any(|h| h == *f))
+        .map(|f| format!(" AND {alias}.{f} = 0"))
+        .collect()
+}
+
+/// Seconds since the epoch, as Hermes stores times, in ms.
+fn secs_ms(secs: f64) -> u64 {
+    (secs.max(0.0) * 1000.0) as u64
+}
+
+/// Hermes Agent's newest terminal sessions (not a subagent's, not
+/// archived or hidden ones), by the time of their last message.
+fn hermes_sessions(db: &Path) -> rusqlite::Result<Vec<LogRef>> {
+    let c = open_db(db)?;
+    let have = columns(&c, "sessions")?;
+    let mut q = c.prepare(&format!(
+        "SELECT s.id, s.cwd, s.started_at,
+                (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id),
+                (SELECT COALESCE(SUM(LENGTH(m.content)), 0) + COALESCE(SUM(LENGTH(m.tool_calls)), 0)
+                   FROM messages m
+                  WHERE m.session_id = s.id AND m.role IN ('user', 'assistant'))
+           FROM sessions s
+          WHERE s.source IN ({HERMES_SOURCES}) AND s.parent_session_id IS NULL{}
+          ORDER BY s.started_at DESC
+          LIMIT ?1",
+        unset(&have, "s", &["archived", "hidden"])
+    ))?;
+    let rows = q.query_map([DB_SESSIONS_MAX as i64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+            r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+            r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, cwd, started, last, size) = row?;
+        out.push(LogRef {
+            agent: "hermes",
+            path: db_path(db, &id),
+            modified: SystemTime::UNIX_EPOCH + Duration::from_millis(secs_ms(started.max(last))),
+            size: size.max(0) as u64,
+            cwd: cwd.filter(|d| d.starts_with('/')).map(PathBuf::from),
+        });
+    }
+    Ok(out)
+}
+
+/// The text of a Hermes message's content: plain text, or JSON after
+/// [`HERMES_JSON`] (a string, or parts of which the `text` ones count).
+fn hermes_text(content: &str) -> Option<String> {
+    let Some(json) = content.strip_prefix(HERMES_JSON) else {
+        return Some(content.to_string());
+    };
+    match serde_json::from_str::<Value>(json).ok()? {
+        Value::String(s) => Some(s),
+        Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter(|p| p["type"] == "text")
+                .filter_map(|p| p["text"].as_str())
+                .collect();
+            (!texts.is_empty()).then(|| texts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+/// One session of Hermes Agent's store: the person's messages, the
+/// agent's text and its tool calls (the tool and its arguments). Its
+/// `tool` messages (what a tool returned), reasoning, messages it took
+/// back (`active = 0`), and what it adds itself (a compaction summary, a
+/// notice shown but never typed) are not read.
+fn hermes_session(db: &Path, id: &str) -> rusqlite::Result<Option<DbSession>> {
+    let c = open_db(db)?;
+    let head = c
+        .query_row(
+            &format!(
+                "SELECT cwd, title, started_at FROM sessions
+                  WHERE id = ?1 AND parent_session_id IS NULL AND source IN ({HERMES_SOURCES})"
+            ),
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                ))
+            },
+        )
+        .optional()?;
+    let Some((cwd, title, started)) = head else {
+        return Ok(None);
+    };
+    let have = columns(&c, "messages")?;
+    let mut only = String::new();
+    if have.iter().any(|h| h == "active") {
+        only.push_str(" AND active = 1");
+    }
+    if have.iter().any(|h| h == "display_kind") {
+        only.push_str(" AND display_kind IS NULL");
+    }
+    only.push_str(&unset(&have, "messages", &["_compressed_summary"]));
+    let mut q = c.prepare(&format!(
+        "SELECT role, timestamp, content, tool_calls FROM messages
+          WHERE session_id = ?1 AND role IN ('user', 'assistant'){only}
+          ORDER BY id"
+    ))?;
+    let rows = q.query_map([id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut parts = Vec::new();
+    for row in rows {
+        let (role, at, content, calls) = row?;
+        let at = secs_ms(at);
+        if let Some(text) = content.as_deref().and_then(hermes_text) {
+            let added = HERMES_ADDED
+                .iter()
+                .any(|p| text.trim_start().starts_with(p));
+            parts.push(DbPart {
+                role: role.clone(),
+                at,
+                kind: "text".into(),
+                text: Some(text),
+                added,
+                tool: None,
+                input: Value::Null,
+            });
+        }
+        if role != "assistant" {
+            continue;
+        }
+        let calls: Vec<Value> = calls
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_default();
+        for call in calls {
+            let f = &call["function"];
+            let input = match &f["arguments"] {
+                Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+                v => v.clone(),
+            };
+            parts.push(DbPart {
+                role: role.clone(),
+                at,
+                kind: "tool".into(),
+                text: None,
+                added: false,
+                tool: f["name"].as_str().map(str::to_string),
+                input,
+            });
+        }
+    }
+    Ok(Some(DbSession {
+        cwd,
+        title,
+        created: secs_ms(started),
         parts,
     }))
 }

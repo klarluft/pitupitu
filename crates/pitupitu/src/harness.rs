@@ -113,7 +113,7 @@ pub fn built_in() -> Vec<Profile> {
         p("droid", "droid", None, Some("droid")),
         p("amp", "amp", None, None),
         p("grok", "grok", None, Some("grok")),
-        p("hermes", "hermes", None, Some("hermes")),
+        p("hermes", "hermes", Some("hermes_settings"), Some("hermes")),
         p("kimi", "kimi", None, Some("kimi")),
         p("letta", "letta", None, Some("letta")),
         p("qodercli", "qodercli", None, Some("qodercli")),
@@ -131,6 +131,12 @@ pub fn built_in() -> Vec<Profile> {
                     trust_yes: vec!["Trust, continue".into()],
                     approval: vec!["requires approval".into()],
                     login: vec!["let's get you signed in".into()],
+                    ..Screens::default()
+                }
+            }
+            "hermes" => {
+                profile.screens = Screens {
+                    approval: vec!["Dangerous Command".into()],
                     ..Screens::default()
                 }
             }
@@ -360,6 +366,17 @@ async fn run_lister(p: &Profile, home: &Path) -> Listed {
             let text = std::fs::read_to_string(home.join(".qwen/settings.json")).ok();
             parsed(text.as_deref().and_then(qwen_models), None)
         }
+        Some("hermes_settings") => {
+            let hermes = home.join(".hermes");
+            let config = std::fs::read_to_string(hermes.join("config.yaml")).ok();
+            let cache = std::fs::read_to_string(hermes.join("provider_models_cache.json")).ok();
+            parsed(
+                config
+                    .as_deref()
+                    .and_then(|c| hermes_models(c, cache.as_deref())),
+                None,
+            )
+        }
         Some("cline_settings") => {
             let text = std::fs::read_to_string(home.join(".cline/data/settings/models.json")).ok();
             parsed(text.as_deref().and_then(cline_models), None)
@@ -588,6 +605,115 @@ pub fn cline_models(text: &str) -> Option<Vec<Model>> {
     )
 }
 
+/// Hermes Agent's models, from its `config.yaml` and the model picker's
+/// cache (`provider_models_cache.json`): those of the provider in use only,
+/// since `--model` picks within it (another provider's model is "not
+/// found"). The provider is `model.provider`; for `custom`, the entry of
+/// `custom_providers` (or `providers`) with the same `base_url`. Its models
+/// are that entry's `model`, `default_model` and `models` (a list or a
+/// map) and the cache's list for it; `model.default` is the default. Keys
+/// and URLs are never taken out.
+pub fn hermes_models(config: &str, cache: Option<&str>) -> Option<Vec<Model>> {
+    use yaml_rust2::{Yaml, YamlLoader};
+    let doc = YamlLoader::load_from_str(config).ok()?.into_iter().next()?;
+    fn text(y: &Yaml) -> Option<&str> {
+        y.as_str().map(str::trim).filter(|s| !s.is_empty())
+    }
+    let model = &doc["model"];
+    let default = text(model)
+        .or_else(|| text(&model["default"]))
+        .or_else(|| text(&model["model"]));
+    let provider = text(&model["provider"]);
+    let base = |y: &Yaml| text(y).map(|u| u.trim_end_matches('/').to_string());
+    let want_base = base(&model["base_url"]);
+    // The entry of the provider in use, and its name.
+    let named = |name: &str| -> Option<(String, Yaml)> {
+        let custom = doc["custom_providers"]
+            .as_vec()
+            .and_then(|v| v.iter().find(|e| text(&e["name"]) == Some(name)).cloned());
+        custom
+            .or_else(|| {
+                let p = &doc["providers"][name];
+                (!p.is_badvalue() && !p.is_null()).then(|| p.clone())
+            })
+            .map(|e| (name.to_string(), e))
+    };
+    let by_base = || -> Option<(String, Yaml)> {
+        let want = want_base.as_deref()?;
+        let custom = doc["custom_providers"]
+            .as_vec()
+            .into_iter()
+            .flatten()
+            .find_map(|e| {
+                (base(&e["base_url"]).as_deref() == Some(want))
+                    .then(|| (text(&e["name"]).unwrap_or("custom").to_string(), e.clone()))
+            });
+        custom.or_else(|| {
+            doc["providers"].as_hash()?.iter().find_map(|(k, e)| {
+                (base(&e["base_url"]).as_deref() == Some(want))
+                    .then(|| (text(k).unwrap_or("custom").to_string(), e.clone()))
+            })
+        })
+    };
+    let entry = match provider {
+        Some("custom") | None => by_base(),
+        Some(p) => named(p.strip_prefix("custom:").unwrap_or(p)).or_else(by_base),
+    };
+    let name = entry
+        .as_ref()
+        .map(|(n, _)| n.clone())
+        .or(provider.map(str::to_string));
+    let mut ids: Vec<String> = default.map(str::to_string).into_iter().collect();
+    if let Some((_, e)) = &entry {
+        ids.extend(
+            [&e["model"], &e["default_model"]]
+                .into_iter()
+                .filter_map(|y| text(y).map(str::to_string)),
+        );
+        match &e["models"] {
+            Yaml::Array(list) => ids.extend(list.iter().filter_map(|m| {
+                text(m)
+                    .or_else(|| text(&m["id"]))
+                    .or_else(|| text(&m["name"]))
+                    .map(str::to_string)
+            })),
+            Yaml::Hash(map) => ids.extend(map.keys().filter_map(|k| text(k).map(str::to_string))),
+            _ => {}
+        }
+    }
+    // The picker's live list, kept per provider (`openai-api` for the
+    // `openai` provider).
+    if let (Some(n), Some(c)) = (
+        name.as_deref(),
+        cache.and_then(|c| serde_json::from_str::<Value>(c).ok()),
+    ) {
+        for (key, v) in c.as_object().into_iter().flatten() {
+            if key == n || key.strip_prefix(n).is_some_and(|r| r.starts_with('-')) {
+                ids.extend(
+                    v["models"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|m| m.as_str().map(str::to_string)),
+                );
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    Some(
+        ids.into_iter()
+            .filter(|id| seen.insert(id.clone()))
+            .map(|id| Model {
+                default: default == Some(id.as_str()),
+                provider: name.clone(),
+                id,
+                name: None,
+                note: None,
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,6 +798,27 @@ mod tests {
         let m = cline_models(cline).unwrap();
         assert_eq!(m[0].id, "qwen3:27b");
         assert_eq!(m[0].provider.as_deref(), Some("ollama"));
+
+        // As on a real box: a custom provider in use, another provider's
+        // models in the picker's cache (left out), keys never taken.
+        let hermes = "model:\n  default: glm-flash\n  provider: custom\n  base_url: https://api.venice.ai/api/v1/\n  api_key: ${VENICE_API_KEY}\ncustom_providers:\n  - name: venice\n    base_url: https://api.venice.ai/api/v1\n    key_env: VENICE_API_KEY\n    model: glm-flash\n    models:\n      - qwen-max\n      - glm-flash\n  - name: other\n    base_url: https://other.example/v1\n    models: [elsewhere]\n";
+        let cache = r#"{"openai-api": {"fp": "x", "at": 1.0, "models": ["gpt-5.4-nano"]}}"#;
+        let m = hermes_models(hermes, Some(cache)).unwrap();
+        let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["glm-flash", "qwen-max"]);
+        assert!(m[0].default && !m[1].default);
+        assert_eq!(m[0].provider.as_deref(), Some("venice"));
+        assert!(!serde_json::to_string(&m).unwrap().contains("VENICE"));
+        // A built-in provider: its live list from the cache.
+        let openai = "model:\n  default: gpt-5.4\n  provider: openai\nproviders:\n  anthropic:\n    models: {claude-haiku-5-5: {}}\n";
+        let m = hermes_models(openai, Some(cache)).unwrap();
+        let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["gpt-5.4", "gpt-5.4-nano"]);
+        let anthropic = "model:\n  default: claude-haiku-5-5\n  provider: anthropic\nproviders:\n  anthropic:\n    models: {claude-haiku-5-5: {}, claude-opus-5-5: {}}\n";
+        let m = hermes_models(anthropic, None).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[1].id, "claude-opus-5-5");
+        assert_eq!(hermes_models("model: [unclosed", None), None);
 
         assert!(signed_out("Not logged in"));
         assert!(!signed_out("Logged in with Builder ID"));
