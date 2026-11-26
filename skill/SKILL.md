@@ -60,7 +60,7 @@ The person's list (things to do and ideas), reminders and scheduled sessions liv
 
 ## This skill
 
-pitupitu keeps this skill in step with itself: setup installs it for the agents on this machine, and the box agent refreshes its own copies each time it starts (so after an update too). `pitupitu skill status` says, for each copy, whether it is `current`, `outdated`, `unmanaged` (someone wrote their own; pitupitu leaves it alone) or `missing`; `pitupitu skill install` writes it now for Claude Code, Codex, Kiro CLI and `~/.agents/skills` (which OpenCode, Kilo Code, pi, Qwen Code and Cline read). A copy that still has `managed-by: pitupitu` in its metadata is replaced at the next start, so to keep changes of your own, delete that line first.
+pitupitu keeps this skill in step with itself: setup installs it for the agents on this machine, and the box agent refreshes its own copies each time it starts (so after an update too). `pitupitu skill status` says, for each copy, whether it is `current`, `outdated`, `unmanaged` (someone wrote their own; pitupitu leaves it alone) or `missing`; `pitupitu skill install` writes it now for Claude Code, Codex, Kiro CLI, Hermes Agent and `~/.agents/skills` (which OpenCode, Kilo Code, pi, Qwen Code and Cline read). A copy that still has `managed-by: pitupitu` in its metadata is replaced at the next start, so to keep changes of your own, delete that line first.
 
 ## Not here
 
