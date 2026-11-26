@@ -54,8 +54,14 @@ treats absent as lower than any value.
 `prompt` types the text and Enter and returns the state from *before* the
 agent reacted. It does not prove the agent started a turn. Delivered means
 `state_change_seq` advanced afterwards. The cloud waits for that and
-treats no change within a few seconds as a prompt that did not land; the
-box does not retry on its own.
+treats no change within a few seconds as a prompt that did not land.
+
+One case the box mends itself: a prompt typed while the agent was still
+getting ready can stay in its input box with its Enter lost (Hermes Agent,
+about one start in six, when herdr saw it ready early). When the agent has
+not changed state for 3 seconds after the prompt and the prompt's first
+words are still on its last lines, the box presses Enter once more. It never
+types the prompt again.
 
 ## Dialogs: idle is not permission
 

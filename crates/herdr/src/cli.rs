@@ -24,6 +24,18 @@ const SHELL_WAIT: Duration = Duration::from_secs(10);
 
 /// Drives herdr by shelling out to its CLI.
 ///
+/// How long a prompt may sit unsent before Enter is pressed again.
+const UNSENT: Duration = Duration::from_secs(3);
+
+/// What of a prompt is looked for on the screen to tell it is still in
+/// the input box: its first line's first 24 characters, when that is
+/// enough to recognise it.
+fn prompt_head(text: &str) -> Option<String> {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let head: String = first.chars().take(24).collect();
+    (head.chars().count() >= 6).then_some(head)
+}
+
 /// The CLI only works from inside a herdr-managed pane or with the server's
 /// socket reachable; it inherits that context from the environment.
 #[derive(Debug, Clone)]
@@ -215,6 +227,40 @@ impl HerdrCli {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
+    /// A prompt typed while the agent was still getting ready can stay in
+    /// its input box, its Enter lost (Hermes Agent, about one start in
+    /// six, when herdr saw it ready early). When the agent has not changed
+    /// state for `wait` since the prompt and the prompt's start is still on
+    /// its last lines, Enter is pressed once more. Otherwise, the usual
+    /// case, it returns as soon as the agent changes state.
+    pub(crate) async fn submit_if_left(&self, agent: &str, head: &str, seq: u64, wait: Duration) {
+        let end = std::time::Instant::now() + wait;
+        loop {
+            tokio::time::sleep(wait / 6).await;
+            let Ok(now) = self.agent(agent).await else {
+                return;
+            };
+            if now.state_change_seq != seq || !now.agent_status.is_ready() {
+                return;
+            }
+            if std::time::Instant::now() >= end {
+                break;
+            }
+        }
+        let Ok(screen) = self
+            .run_text(&[
+                "agent", "read", agent, "--source", "visible", "--lines", "6",
+            ])
+            .await
+        else {
+            return;
+        };
+        if screen.lines().any(|l| l.contains(head)) {
+            tracing::info!(agent, "the prompt stayed in the input box; pressing Enter");
+            let _ = self.send_keys(agent, &["enter"]).await;
         }
     }
 
@@ -585,9 +631,17 @@ impl AgentHost for HerdrCli {
                 message: format!("{d:?} dialog on screen; read it and answer with send_keys"),
             });
         }
-        self.run_json(&["agent", "prompt", agent, text])
+        let before = self.agent(agent).await.ok().map(|a| a.state_change_seq);
+        let info = self
+            .run_json(&["agent", "prompt", agent, text])
             .await
-            .and_then(agent_from)
+            .and_then(agent_from)?;
+        if let (Some(seq), Some(head)) = (before, prompt_head(text)) {
+            let cli = self.clone();
+            let agent = agent.to_string();
+            tokio::spawn(async move { cli.submit_if_left(&agent, &head, seq, UNSENT).await });
+        }
+        Ok(info)
     }
 
     async fn agent(&self, agent: &str) -> Result<AgentInfo> {
@@ -798,7 +852,7 @@ mod prompt_tests {
             format!(
                 "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1 $2\" in\n\
                  'agent read') cat '{}';;\n\
-                 'agent prompt') echo '{{\"id\":1,\"result\":{{\"agent\":{{\"agent\":\"claude\",\"name\":\"n\",\
+                 'agent prompt'|'agent get') echo '{{\"id\":1,\"result\":{{\"agent\":{{\"agent\":\"claude\",\"name\":\"n\",\
                  \"agent_status\":\"idle\",\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"cwd\":\"/tmp\",\
                  \"state_change_seq\":3}}}}}}';;\n\
                  esac\n",
@@ -821,6 +875,41 @@ mod prompt_tests {
         let log = std::fs::read_to_string(&log).unwrap();
         assert!(log.contains("agent read n --source visible"), "{log}");
         assert!(!log.contains("agent prompt"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_prompt_left_in_the_input_box_gets_its_enter() {
+        // Still idle at the same state after the prompt, its words on the
+        // last lines: Enter once.
+        let (bin, log) = fake_herdr("\nppbench ❯ Reply with exactly the word OK\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        let head = prompt_head("Reply with exactly the word OK").unwrap();
+        cli.submit_if_left("n", &head, 3, Duration::from_millis(60))
+            .await;
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("agent send-keys n enter"), "{log}");
+
+        // The agent moved on (another state): nothing pressed.
+        let (bin, log) = fake_herdr("\nppbench ❯ Reply with exactly the word OK\n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        cli.submit_if_left("n", &head, 2, Duration::from_millis(60))
+            .await;
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(!log.contains("send-keys"), "{log}");
+
+        // Not on the screen: nothing pressed.
+        let (bin, log) = fake_herdr("\nppbench ❯ \n");
+        let cli = HerdrCli::with_binary(bin.display().to_string());
+        cli.submit_if_left("n", &head, 3, Duration::from_millis(60))
+            .await;
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(!log.contains("send-keys"), "{log}");
+
+        assert_eq!(prompt_head("\n  ok\n"), None);
+        assert_eq!(
+            prompt_head("\nWater the meadow and the fence, please").as_deref(),
+            Some("Water the meadow and the")
+        );
     }
 
     #[tokio::test]
