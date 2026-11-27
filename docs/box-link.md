@@ -144,7 +144,7 @@ Runs the update the way the thing was installed, exactly as `pitupitu update [bo
 
 - `box`: `brew upgrade pitupitu` under a Cellar; otherwise the release tarball for this machine, checked against its `.sha256`, put in place of the running binary. The reply goes out first; then the service restarts, the link drops, and the next `hello` carries the new `version`. `restart` is `done` when a service runs the box agent, `needed` when there is none (a `pitupitu connect` started by hand).
 - `herdr`: `brew upgrade herdr` under a Cellar, `herdr update` for herdr's own installer. Afterwards `herdr status` is read again and an `inventory` note follows. `restart` is `needed` when the running server is older than the new binary (it runs the new one once the person quits herdr and opens it again), `none` otherwise.
-- Errors are `api` with a code: `update_failed` (it ran and failed; the message is the command's last line), `update_unavailable` (herdr installed some other way, herdr not installed, no release binary for this machine; the message says what to do instead), `nothing_to_update` (already the newest).
+- Errors are `api` with a code: `update_failed` (it ran and failed; the message says what failed and that nothing changed, then the command's error: for `brew upgrade`, Homebrew's from its `Error:` line on, else its last line), `update_unavailable` (herdr installed some other way, herdr not installed, no release binary for this machine; the message says what to do instead), `nothing_to_update` (already the newest).
 
 ## Notes from the box
 
