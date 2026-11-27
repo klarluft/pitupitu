@@ -381,6 +381,38 @@ async fn installed_version() -> Option<String> {
     parse_version(&v).map(|_| v)
 }
 
+/// What a failed `brew upgrade` said, as one line that also says nothing
+/// changed: brew's error from its `Error:` line on (an error often runs
+/// over several lines, the last of them only advice), else its last line.
+fn brew_failure(formula: &str, stderr: &str, stdout: &str) -> String {
+    const MOST: usize = 600;
+    let said = |text: &str| -> Option<String> {
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let from = lines.iter().position(|l| l.starts_with("Error:"));
+        let words = match from {
+            Some(i) => lines[i..]
+                .iter()
+                .filter(|l| !l.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => lines.iter().rev().find(|l| !l.is_empty())?.to_string(),
+        };
+        let words = words.trim_start_matches("Error:").trim().to_string();
+        (!words.is_empty()).then_some(words)
+    };
+    let mut why = said(stderr).or_else(|| said(stdout)).unwrap_or_default();
+    if why.chars().count() > MOST {
+        why = why.chars().take(MOST).collect::<String>() + "…";
+    }
+    let head = format!("brew upgrade {formula} failed, so {formula} is unchanged");
+    if why.is_empty() {
+        head
+    } else {
+        format!("{head}. Homebrew says: {why}")
+    }
+}
+
 /// The `brew` of the prefix `binary` was installed into (it may not be on
 /// the service's PATH), else `brew` from PATH.
 pub fn brew_for(binary: &Path) -> PathBuf {
@@ -393,7 +425,7 @@ pub fn brew_for(binary: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("brew"))
 }
 
-/// `brew upgrade <formula>`; a failure carries brew's last line.
+/// `brew upgrade <formula>`; a failure carries brew's error (`brew_failure`).
 pub async fn run_brew(binary: &Path, formula: &str) -> Result<(), Refused> {
     let brew = brew_for(binary);
     let out = tokio::process::Command::new(&brew)
@@ -405,19 +437,11 @@ pub async fn run_brew(binary: &Path, formula: &str) -> Result<(), Refused> {
     if out.status.success() {
         return Ok(());
     }
-    let last = |b: &[u8]| {
-        String::from_utf8_lossy(b)
-            .lines()
-            .rev()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-            .map(str::to_string)
-    };
-    Err(Refused::Failed(
-        last(&out.stderr)
-            .or_else(|| last(&out.stdout))
-            .unwrap_or_else(|| format!("brew upgrade {formula} failed")),
-    ))
+    Err(Refused::Failed(brew_failure(
+        formula,
+        &String::from_utf8_lossy(&out.stderr),
+        &String::from_utf8_lossy(&out.stdout),
+    )))
 }
 
 #[cfg(test)]
@@ -461,6 +485,32 @@ mod tests {
             brew_for(Path::new("/nonexistent/Cellar/herdr/0.9.5/bin/herdr")),
             PathBuf::from("brew")
         );
+    }
+
+    #[test]
+    fn a_failed_brew_upgrade_says_its_whole_error() {
+        let stderr = "==> Auto-updated Homebrew!\n\
+            Warning: You are using macOS 27.\n\
+            Error: Your Xcode (26.6) at /Applications/Xcode.app is too outdated.\n\
+            Please update to Xcode 27.0 (or delete it).\n\
+            Xcode can be updated from the App Store.\n\n";
+        assert_eq!(
+            brew_failure("pitupitu", stderr, ""),
+            "brew upgrade pitupitu failed, so pitupitu is unchanged. Homebrew says: \
+             Your Xcode (26.6) at /Applications/Xcode.app is too outdated. Please update \
+             to Xcode 27.0 (or delete it). Xcode can be updated from the App Store."
+        );
+        // No `Error:` line: the last thing brew said.
+        assert_eq!(
+            brew_failure("herdr", "", "==> Upgrading herdr\nno space left on device\n"),
+            "brew upgrade herdr failed, so herdr is unchanged. Homebrew says: no space left on device"
+        );
+        assert_eq!(
+            brew_failure("herdr", "", ""),
+            "brew upgrade herdr failed, so herdr is unchanged"
+        );
+        let long = format!("Error: {}", "x".repeat(2000));
+        assert!(brew_failure("pitupitu", &long, "").chars().count() < 700);
     }
 
     #[test]
