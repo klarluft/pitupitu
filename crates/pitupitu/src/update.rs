@@ -321,8 +321,9 @@ pub async fn apply_box(c: &BoxCheck) -> Result<Updated, Refused> {
             .unwrap_or_else(|| c.latest.clone());
         if !is_newer(&now, c.current) {
             return Err(Refused::Nothing(format!(
-                "Homebrew has no newer pitupitu than {} yet; try again in a few hours",
-                c.current
+                "Homebrew's tap does not have pitupitu {} yet, so {} stays; the tap follows \
+                 a release within a few hours",
+                c.latest, c.current
             )));
         }
         now
@@ -425,11 +426,21 @@ pub fn brew_for(binary: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("brew"))
 }
 
-/// `brew upgrade <formula>`; a failure carries brew's error (`brew_failure`).
+/// `brew update`, then `brew upgrade <formula>`; a failure carries brew's
+/// error (`brew_failure`). Left to itself, brew refreshes its taps at most
+/// once a day, so a release from the last day would go unseen. A failed
+/// refresh is not one: the upgrade goes ahead and says what it finds.
 pub async fn run_brew(binary: &Path, formula: &str) -> Result<(), Refused> {
     let brew = brew_for(binary);
+    let _ = tokio::process::Command::new(&brew)
+        .args(["update", "--quiet"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await;
     let out = tokio::process::Command::new(&brew)
         .args(["upgrade", formula])
+        // Just refreshed: no second look at the taps.
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .stdin(std::process::Stdio::null())
         .output()
         .await
@@ -511,6 +522,61 @@ mod tests {
         );
         let long = format!("Error: {}", "x".repeat(2000));
         assert!(brew_failure("pitupitu", &long, "").chars().count() < 700);
+    }
+
+    /// A Homebrew prefix with a `brew` that logs its arguments and fails
+    /// `upgrade` when `fail` is set, and `formula` in its Cellar.
+    #[cfg(unix)]
+    fn fake_brew(formula: &str, fail: bool) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path();
+        let bin = prefix.join(format!("Cellar/{formula}/1.0/bin"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        let exe = bin.join(formula);
+        std::fs::write(&exe, "").unwrap();
+        let brew = prefix.join("bin/brew");
+        let log = prefix.join("calls");
+        let tail = if fail {
+            "[ \"$1\" = upgrade ] && { echo 'Error: it went wrong.' >&2; exit 1; }\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            &brew,
+            format!(
+                "#!/bin/sh\necho \"$* auto=${{HOMEBREW_NO_AUTO_UPDATE:-}}\" >> '{}'\n{tail}exit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, exe)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn brew_refreshes_its_taps_before_upgrading() {
+        let (dir, exe) = fake_brew("pitupitu", false);
+        run_brew(&exe, "pitupitu").await.unwrap();
+        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+        let calls: Vec<_> = calls.lines().collect();
+        // `brew update` refreshes whatever HOMEBREW_NO_AUTO_UPDATE says
+        // (CI runners set it), so only the upgrade's is checked.
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].starts_with("update --quiet auto="));
+        assert_eq!(calls[1], "upgrade pitupitu auto=1");
+
+        let (dir, exe) = fake_brew("herdr", true);
+        let err = run_brew(&exe, "herdr").await.unwrap_err();
+        assert_eq!(
+            err.message(),
+            "brew upgrade herdr failed, so herdr is unchanged. Homebrew says: it went wrong."
+        );
+        assert!(std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .starts_with("update --quiet"));
     }
 
     #[test]

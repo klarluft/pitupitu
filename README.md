@@ -207,7 +207,7 @@ pitupitu update herdr    # herdr
 pitupitu update all      # both
 ```
 
-Each shows the version it would install, what is running right now, and asks before doing anything. It updates the way the thing was installed: `brew upgrade` for a Homebrew install; for the box agent otherwise the release binary (checked against its SHA-256) in place of this one; for herdr otherwise herdr's own `herdr update`. A herdr installed some other way (mise, Nix) is left to that way.
+Each shows the version it would install, what is running right now, and asks before doing anything. It updates the way the thing was installed: `brew update` and then `brew upgrade` for a Homebrew install; for the box agent otherwise the release binary (checked against its SHA-256) in place of this one; for herdr otherwise herdr's own `herdr update`. A herdr installed some other way (mise, Nix) is left to that way.
 
 Your sessions are not touched. The box agent's update restarts only the box agent; its link to the cloud drops for a few seconds. herdr's update replaces the binary and leaves the running server and its sessions as they are; the server runs the new version once you quit herdr and open it again (`pitupitu status` says when one is waiting).
 
