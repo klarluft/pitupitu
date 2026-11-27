@@ -561,10 +561,12 @@ mod tests {
         let (dir, exe) = fake_brew("pitupitu", false);
         run_brew(&exe, "pitupitu").await.unwrap();
         let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
-        assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            ["update --quiet auto=", "upgrade pitupitu auto=1"]
-        );
+        let calls: Vec<_> = calls.lines().collect();
+        // `brew update` refreshes whatever HOMEBREW_NO_AUTO_UPDATE says
+        // (CI runners set it), so only the upgrade's is checked.
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].starts_with("update --quiet auto="));
+        assert_eq!(calls[1], "upgrade pitupitu auto=1");
 
         let (dir, exe) = fake_brew("herdr", true);
         let err = run_brew(&exe, "herdr").await.unwrap_err();
