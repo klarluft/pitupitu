@@ -5,10 +5,19 @@
 # result to the release as `pitupitu.rb`. klarluft/homebrew-tap copies that
 # file in as it is, so the formula and the binaries it points at come from
 # the same run. Homebrew reads the version from the `v…` in the URLs.
+#
+# The placeholder below the license becomes the bottle block: one bottle per platform, made by
+# `bottle.sh` from the same tarballs. Homebrew pours a bottle as it is,
+# while installing a formula without one counts as building from source,
+# which Homebrew refuses on a Mac whose Xcode or Command Line Tools are
+# older than it wants (on Linux, without a compiler), though nothing here
+# is compiled.
 class Pitupitu < Formula
   desc "Links this machine's coding agents to pitupitu, a voice assistant"
   homepage "https://pitupitu.chat"
   license "Apache-2.0"
+
+  __BOTTLE__
 
   on_macos do
     on_arm do
