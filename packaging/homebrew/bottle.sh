@@ -32,7 +32,7 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "no release tarball for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
-export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
+export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1
 tap=klarluft/tap
 formula="$tap/pitupitu"
 

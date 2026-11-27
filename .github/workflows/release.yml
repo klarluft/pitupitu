@@ -65,6 +65,7 @@ jobs:
   bottle:
     needs: build
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-15, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
